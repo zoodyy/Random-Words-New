@@ -92,7 +92,7 @@ struct ContentView: View {
                         VStack(spacing: 0) {
                             ForEach(selectedWords, id: \.self) { word in
                                 
-                                let maxFontSize = geo.size.height * 0.35
+                                let maxFontSize = geo.size.height * 0.2
                                 let calculatedSize = min(geo.size.width, maxFontSize)
                                 
                                 Text(word)
@@ -161,21 +161,30 @@ struct ContentView: View {
         }
     }
     
+    // MARK: - addToOwnVocab (FIXED)
+    // Preserve insertion order and avoid alphabetizing the file.
     private func addToOwnVocab(_ wordsToAdd: [String]) {
         let fileURL = getOwnVocabURL()
         
-        var existing: Set<String> = []
-        
+        // Read existing content into ordered array
+        var existingOrdered: [String] = []
         if FileManager.default.fileExists(atPath: fileURL.path),
            let content = try? String(contentsOf: fileURL) {
-            existing = Set(content.components(separatedBy: .newlines))
+            existingOrdered = content
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
         }
         
+        // Append new words preserving order and avoiding duplicates
         for word in wordsToAdd {
-            existing.insert(word)
+            if !existingOrdered.contains(word) {
+                existingOrdered.append(word)
+            }
         }
         
-        let newContent = existing.sorted().joined(separator: "\n")
+        // Write back in insertion order (no sorting)
+        let newContent = existingOrdered.joined(separator: "\n")
         try? newContent.write(to: fileURL, atomically: true, encoding: .utf8)
     }
     
