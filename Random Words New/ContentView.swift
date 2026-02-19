@@ -16,7 +16,6 @@ struct ContentView: View {
         var upper: Double
     }
 
-    
     // MARK: - Persistent Storage
     
     @AppStorage("switchInterval") private var switchInterval: Double = 3
@@ -27,11 +26,10 @@ struct ContentView: View {
     @AppStorage("selectedCSVsData") private var selectedCSVsData: Data = Data()
     @AppStorage("csvRangesData") private var csvRangesData: Data = Data()
     
-    // MARK: - Runtime State (REAL mutable state)
+    // MARK: - Runtime State
     
     @State private var selectedCSVs: Set<String> = []
     @State private var csvRanges: [String: RangePair] = [:]
-    
     @State private var selectedWords: [String] = []
     @State private var timer: Timer?
     @State private var sliderChangeTrigger = 0
@@ -84,12 +82,28 @@ struct ContentView: View {
                         .font(.largeTitle)
                         .bold()
                 } else {
-                    VStack(spacing: 12) {
-                        ForEach(selectedWords, id: \.self) { word in
-                            Text(word)
-                                .font(.largeTitle)
-                                .bold()
-                                .multilineTextAlignment(.center)
+                    GeometryReader { geo in
+                        VStack(spacing: 0) {
+                            ForEach(selectedWords, id: \.self) { word in
+                                
+                                // Max font scales with device height
+                                let maxFontSize = geo.size.height * 0.18
+                                
+                                // Start large but cap it intelligently
+                                let calculatedSize = min(geo.size.width, maxFontSize)
+                                
+                                Text(word)
+                                    .font(.system(size: calculatedSize))
+                                    .bold()
+                                    .minimumScaleFactor(0.1)
+                                    .lineLimit(1)
+                                    .multilineTextAlignment(.center)
+                                    .frame(
+                                        width: geo.size.width,
+                                        height: geo.size.height / CGFloat(selectedWords.count),
+                                        alignment: .center
+                                    )
+                            }
                         }
                     }
                 }
@@ -107,6 +121,7 @@ struct ContentView: View {
             selectRandomWords()
         }
     }
+
     
     // MARK: - Toolbar
     
