@@ -15,6 +15,12 @@ struct ContentView: View {
         var lower: Double
         var upper: Double
     }
+    
+    struct WordEditTarget: Hashable, Identifiable {
+        let csv: String
+        let word: String
+        var id: String { "\(csv)-\(word)" }
+    }
 
     // MARK: - Persistent Storage
     
@@ -31,15 +37,15 @@ struct ContentView: View {
     @State private var selectedCSVs: Set<String> = []
     @State private var csvRanges: [String: RangePair] = [:]
     @State private var selectedWords: [String] = []
+    @State private var selectedWordSource: [String: String] = [:]
+    @State private var wordToEdit: WordEditTarget?
+    
     @State private var timer: Timer?
     @State private var sliderChangeTrigger = 0
     @State private var allWordsPerCSV: [String: [String]] = [:]
     
-    // Swipe animation state
     @State private var swipeOffset: CGFloat = 0
-    
-    // Long press timer
-    @State private var longPressTimer: Timer?
+    @State private var verticalOffset: CGFloat = 0
     
     // MARK: - Theme
     
@@ -61,11 +67,20 @@ struct ContentView: View {
         NavigationStack {
             mainContent()
                 .toolbar { toolbarMenu() }
+                .navigationDestination(item: $wordToEdit) { target in
+                    EditCSVView(
+                        csvFileName: target.csv,
+                        scrollToWord: target.word
+                    )
+                }
                 .onAppear {
                     loadPersistedData()
                     loadCSVs()
                 }
-                .onChange(of: selectedCSVs) { _ in saveCSVs() }
+                .onChange(of: selectedCSVs) { _ in
+                    saveCSVs()
+                    loadCSVs()
+                }
                 .onChange(of: csvRanges) { _ in saveRanges() }
                 .onChange(of: switchInterval) { _ in updateTimer() }
                 .onChange(of: numberOfWordsToShow) { _ in selectRandomWords() }
@@ -105,7 +120,6 @@ struct ContentView: View {
                                         width: geo.size.width,
                                         height: geo.size.height / CGFloat(selectedWords.count)
                                     )
-                                    // Swipe left gesture
                                     .gesture(
                                         DragGesture()
                                             .onEnded { value in
@@ -114,38 +128,50 @@ struct ContentView: View {
                                                 }
                                             }
                                     )
-                                    // Long press copy + vibrate after 0.4s hold
-                                    .simultaneousGesture(
-                                        LongPressGesture(minimumDuration: 0.4)
-                                            .onEnded { _ in
-                                                // Vibrate and copy immediately after 0.4s hold
-                                                UIPasteboard.general.string = word
-                                                let generator = UIImpactFeedbackGenerator(style: .medium)
-                                                generator.impactOccurred()
-                                            }
-                                    )
                             }
                         }
                         .offset(x: swipeOffset)
+                        .offset(y: verticalOffset)
                         .animation(.easeInOut(duration: 0.25), value: swipeOffset)
+                        .animation(.easeInOut(duration: 0.3), value: verticalOffset)
                     }
                 }
                 
                 Spacer()
-                
-                Text(filteredWords.isEmpty ? "No words available" : "")
-                    .foregroundColor(.gray)
-                    .padding(.bottom, 40)
             }
         }
         .contentShape(Rectangle())
+        .gesture(
+            DragGesture()
+                .onEnded { value in
+                    if value.translation.height < -120 {
+                        triggerUpAnimationAndNavigate()
+                    }
+                }
+        )
         .onTapGesture {
-            guard !filteredWords.isEmpty else { return }
+            guard !filteredWordPairs.isEmpty else { return }
             selectRandomWords()
         }
     }
     
-    // MARK: - Swipe Handling
+    // MARK: - Up Animation
+    
+    private func triggerUpAnimationAndNavigate() {
+        guard let firstWord = selectedWords.first,
+              let csv = selectedWordSource[firstWord] else { return }
+        
+        withAnimation(.easeInOut(duration: 0.3)) {
+            verticalOffset = -800
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            verticalOffset = 0
+            wordToEdit = WordEditTarget(csv: csv, word: firstWord)
+        }
+    }
+    
+    // MARK: - Swipe Left
     
     private func handleLeftSwipe() {
         guard !selectedWords.isEmpty else { return }
@@ -161,81 +187,10 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - addToOwnVocab (FIXED)
-    // Preserve insertion order and avoid alphabetizing the file.
-    private func addToOwnVocab(_ wordsToAdd: [String]) {
-        let fileURL = getOwnVocabURL()
-        
-        // Read existing content into ordered array
-        var existingOrdered: [String] = []
-        if FileManager.default.fileExists(atPath: fileURL.path),
-           let content = try? String(contentsOf: fileURL) {
-            existingOrdered = content
-                .components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        }
-        
-        // Append new words preserving order and avoiding duplicates
-        for word in wordsToAdd {
-            if !existingOrdered.contains(word) {
-                existingOrdered.append(word)
-            }
-        }
-        
-        // Write back in insertion order (no sorting)
-        let newContent = existingOrdered.joined(separator: "\n")
-        try? newContent.write(to: fileURL, atomically: true, encoding: .utf8)
-    }
-    
-    private func getOwnVocabURL() -> URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ownVocab.csv")
-    }
-    
-    // MARK: - Toolbar
-    
-    @ToolbarContentBuilder
-    private func toolbarMenu() -> some ToolbarContent {
-        
-        ToolbarItem(placement: .topBarLeading) {
-            NavigationLink(
-                destination: SettingsView(
-                    switchInterval: $switchInterval,
-                    numberOfWordsToShow: $numberOfWordsToShow,
-                    fairWordDistribution: $fairWordDistribution,
-                    selectedThemeRaw: $selectedThemeRaw
-                )
-            ) {
-                Image(systemName: "line.3.horizontal")
-            }
-        }
-        
-        ToolbarItem(placement: .topBarTrailing) {
-            NavigationLink(
-                destination: DictView(
-                    selectedCSVs: $selectedCSVs,
-                    words: .constant([]),
-                    csvRanges: Binding(
-                        get: { csvRanges.mapValues { ($0.lower, $0.upper) } },
-                        set: { newValue in
-                            csvRanges = newValue.mapValues {
-                                RangePair(lower: $0.0, upper: $0.1)
-                            }
-                        }
-                    ),
-                    sliderChangeTrigger: $sliderChangeTrigger
-                )
-            ) {
-                Image(systemName: "book")
-            }
-        }
-    }
-    
     // MARK: - Filtering
     
-    private var filteredWords: [String] {
-        var combined: [String] = []
+    private var filteredWordPairs: [(word: String, csv: String)] {
+        var combined: [(String, String)] = []
         
         for csv in selectedCSVs {
             guard let range = csvRanges[csv],
@@ -246,49 +201,20 @@ struct ContentView: View {
             let upper = Int(Double(total) * range.upper)
             
             if lower < upper {
-                combined.append(contentsOf: words[lower..<upper])
+                for word in words[lower..<upper] {
+                    combined.append((word, csv))
+                }
             }
         }
-        
         return combined
     }
     
-    // MARK: - Random
-    
     private func selectRandomWords() {
-        if fairWordDistribution {
-            selectedWords = generateFairWords()
-        } else {
-            selectedWords = Array(filteredWords.shuffled()
-                .prefix(min(numberOfWordsToShow, filteredWords.count)))
-        }
-    }
-    
-    private func generateFairWords() -> [String] {
-        var results: [String] = []
-        let active = selectedCSVs.filter {
-            guard let range = csvRanges[$0],
-                  let words = allWordsPerCSV[$0]
-            else { return false }
-            return !words.isEmpty && range.lower < range.upper
-        }
+        let pairs = filteredWordPairs.shuffled()
+            .prefix(min(numberOfWordsToShow, filteredWordPairs.count))
         
-        for _ in 0..<numberOfWordsToShow {
-            guard let randomCSV = active.randomElement(),
-                  let range = csvRanges[randomCSV],
-                  let words = allWordsPerCSV[randomCSV]
-            else { continue }
-            
-            let total = words.count
-            let lower = Int(Double(total) * range.lower)
-            let upper = Int(Double(total) * range.upper)
-            
-            if lower < upper,
-               let word = words[lower..<upper].randomElement() {
-                results.append(word)
-            }
-        }
-        return results
+        selectedWords = pairs.map { $0.word }
+        selectedWordSource = Dictionary(uniqueKeysWithValues: pairs.map { ($0.word, $0.csv) })
     }
     
     // MARK: - CSV Loading
@@ -297,7 +223,6 @@ struct ContentView: View {
         allWordsPerCSV.removeAll()
         
         for csv in selectedCSVs {
-            
             let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("\(csv).csv")
             
@@ -347,5 +272,72 @@ struct ContentView: View {
     private func loadPersistedData() {
         selectedCSVs = (try? JSONDecoder().decode(Set<String>.self, from: selectedCSVsData)) ?? []
         csvRanges = (try? JSONDecoder().decode([String: RangePair].self, from: csvRangesData)) ?? [:]
+    }
+    
+    // MARK: - Own Vocab
+    
+    private func addToOwnVocab(_ wordsToAdd: [String]) {
+        let fileURL = getOwnVocabURL()
+        
+        var existing: [String] = []
+        if FileManager.default.fileExists(atPath: fileURL.path),
+           let content = try? String(contentsOf: fileURL) {
+            existing = content
+                .components(separatedBy: .newlines)
+                .filter { !$0.isEmpty }
+        }
+        
+        for word in wordsToAdd {
+            if !existing.contains(word) {
+                existing.append(word)
+            }
+        }
+        
+        try? existing.joined(separator: "\n")
+            .write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+    
+    private func getOwnVocabURL() -> URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ownVocab.csv")
+    }
+    
+    // MARK: - Toolbar
+    
+    @ToolbarContentBuilder
+    private func toolbarMenu() -> some ToolbarContent {
+        
+        ToolbarItem(placement: .topBarLeading) {
+            NavigationLink(
+                destination: SettingsView(
+                    switchInterval: $switchInterval,
+                    numberOfWordsToShow: $numberOfWordsToShow,
+                    fairWordDistribution: $fairWordDistribution,
+                    selectedThemeRaw: $selectedThemeRaw
+                )
+            ) {
+                Image(systemName: "line.3.horizontal")
+            }
+        }
+        
+        ToolbarItem(placement: .topBarTrailing) {
+            NavigationLink(
+                destination: DictView(
+                    selectedCSVs: $selectedCSVs,
+                    words: .constant([]),
+                    csvRanges: Binding(
+                        get: { csvRanges.mapValues { ($0.lower, $0.upper) } },
+                        set: { newValue in
+                            csvRanges = newValue.mapValues {
+                                RangePair(lower: $0.0, upper: $0.1)
+                            }
+                        }
+                    ),
+                    sliderChangeTrigger: $sliderChangeTrigger
+                )
+            ) {
+                Image(systemName: "book")
+            }
+        }
     }
 }
