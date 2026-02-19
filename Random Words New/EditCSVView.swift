@@ -3,7 +3,6 @@ import SwiftUI
 struct EditCSVView: View {
     
     let csvFileName: String
-    var scrollToWord: String?
     
     @State private var words: [String] = []
     @State private var originalOrder: [String] = []
@@ -11,9 +10,6 @@ struct EditCSVView: View {
     
     @State private var sortMode: SortMode = .reverseOriginal
     @State private var showingDeleteConfirmation = false
-    
-    // ✅ Highlight state
-    @State private var highlightedWord: String?
     
     @Environment(\.dismiss) private var dismiss
     
@@ -25,74 +21,102 @@ struct EditCSVView: View {
     }
     
     var body: some View {
-        ScrollViewReader { proxy in
-            List {
-                
-                // MARK: - Add New Word
-                Section(header: Text("Add New Word")) {
-                    HStack {
-                        TextField("New word", text: $newWord)
-                            .textInputAutocapitalization(.never)
-                        
-                        Button("Add") {
-                            addWord()
-                        }
-                        .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
+        List {
+            
+            // MARK: - Add New Word
+            Section(header: Text("Add New Word")) {
+                HStack {
+                    TextField("New word", text: $newWord)
+                        .textInputAutocapitalization(.never)
+                    
+                    Button("Add") {
+                        addWord()
                     }
-                }
-                
-                // MARK: - Words
-                Section(header: Text("Words")) {
-                    ForEach(words.indices, id: \.self) { index in
-                        TextField("Word", text: $words[index])
-                            .id(words[index])
-                            .textInputAutocapitalization(.never)
-                            .listRowBackground(
-                                highlightedWord == words[index]
-                                ? Color.yellow.opacity(0.4)
-                                : Color.clear
-                            )
-                            .animation(.easeInOut(duration: 0.3), value: highlightedWord)
-                    }
-                    .onDelete(perform: deleteWords)
-                }
-                
-                // MARK: - Delete CSV
-                Section {
-                    Button(role: .destructive) {
-                        showingDeleteConfirmation = true
-                    } label: {
-                        Text("Delete CSV File")
-                    }
+                    .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-            .navigationTitle("\(csvFileName).csv")
-            .onAppear {
-                ensureFileExistsInDocuments()
-                loadCSV()
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    guard let target = scrollToWord,
-                          words.contains(target) else { return }
-                    
-                    // Scroll to word
-                    proxy.scrollTo(target, anchor: .center)
-                    
-                    // Highlight it
-                    highlightedWord = target
-                    
-                    // Remove highlight after 2 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        withAnimation {
-                            highlightedWord = nil
-                        }
-                    }
+            
+            // MARK: - Existing Words
+            Section() {
+                ForEach(words.indices, id: \.self) { index in
+                    TextField("Word", text: $words[index])
+                        .textInputAutocapitalization(.never)
+                }
+                .onDelete(perform: deleteWords)
+            }
+            
+            // MARK: - Delete CSV (Bottom Section)
+            Section {
+                Button(role: .destructive) {
+                    showingDeleteConfirmation = true
+                } label: {
+                    Text("Delete CSV File")
                 }
             }
         }
+        .navigationTitle("\(csvFileName).csv")
+        .toolbar {
+            
+            ToolbarItem(placement: .topBarLeading) {
+                Menu {
+                    ForEach(SortMode.allCases, id: \.self) { mode in
+                        Button {
+                            changeSortMode(to: mode)
+                        } label: {
+                            if sortMode == mode {
+                                Label(mode.rawValue, systemImage: "checkmark")
+                            } else {
+                                Text(mode.rawValue)
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Sort", systemImage: "arrow.up.arrow.down")
+                }
+            }
+            
+            ToolbarItem(placement: .navigationBarTrailing) {
+                ShareLink(
+                    item: getDocumentsURL(),
+                    preview: SharePreview("\(csvFileName).csv")
+                ) {
+                    Image(systemName: "square.and.arrow.up")
+                }
+            }
+            
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Save") {
+                    saveCSV()
+                    dismiss()
+                }
+            }
+        }
+        .confirmationDialog(
+            "Are you sure you want to delete this CSV?",
+            isPresented: $showingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete CSV", role: .destructive) {
+                deleteCSVFile()
+            }
+            
+            Button("Cancel", role: .cancel) { }
+        }
+        .onAppear {
+            ensureFileExistsInDocuments()
+            loadCSV()
+        }
     }
     
-    // MARK: - File Handling
+    // MARK: - Delete Entire CSV
+    
+    private func deleteCSVFile() {
+        let url = getDocumentsURL()
+        try? FileManager.default.removeItem(at: url)
+        dismiss()
+    }
+    
+    // MARK: - Ensure File Exists
     
     private func ensureFileExistsInDocuments() {
         let docURL = getDocumentsURL()
@@ -104,6 +128,8 @@ struct EditCSVView: View {
         }
     }
     
+    // MARK: - Load CSV
+    
     private func loadCSV() {
         let fileURL = getDocumentsURL()
         
@@ -113,6 +139,21 @@ struct EditCSVView: View {
                 .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         }
         
+        applyCurrentSort()
+    }
+    
+    // MARK: - Save CSV
+    
+    private func saveCSV() {
+        let fileURL = getDocumentsURL()
+        let content = originalOrder.joined(separator: "\n")
+        try? content.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+    
+    // MARK: - Sorting
+    
+    private func changeSortMode(to mode: SortMode) {
+        sortMode = mode
         applyCurrentSort()
     }
     
@@ -136,6 +177,8 @@ struct EditCSVView: View {
         }
     }
     
+    // MARK: - Helpers
+    
     private func getDocumentsURL() -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("\(csvFileName).csv")
@@ -149,10 +192,7 @@ struct EditCSVView: View {
         newWord = ""
         
         applyCurrentSort()
-        
-        let fileURL = getDocumentsURL()
-        try? originalOrder.joined(separator: "\n")
-            .write(to: fileURL, atomically: true, encoding: .utf8)
+        saveCSV()
     }
     
     private func deleteWords(at offsets: IndexSet) {
@@ -161,8 +201,6 @@ struct EditCSVView: View {
         words.remove(atOffsets: offsets)
         originalOrder.removeAll { removedWords.contains($0) }
         
-        let fileURL = getDocumentsURL()
-        try? originalOrder.joined(separator: "\n")
-            .write(to: fileURL, atomically: true, encoding: .utf8)
+        saveCSV()
     }
 }

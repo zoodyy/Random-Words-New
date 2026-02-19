@@ -39,7 +39,7 @@ struct DictView: View {
                         Image(systemName: "doc.text")
                             .foregroundColor(.blue)
                         
-                        Text("\(file)")
+                        Text("\(file).csv")
                         
                         Spacer()
                         
