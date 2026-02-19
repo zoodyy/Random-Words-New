@@ -35,6 +35,12 @@ struct ContentView: View {
     @State private var sliderChangeTrigger = 0
     @State private var allWordsPerCSV: [String: [String]] = [:]
     
+    // Swipe animation state
+    @State private var swipeOffset: CGFloat = 0
+    
+    // Long press timer
+    @State private var longPressTimer: Timer?
+    
     // MARK: - Theme
     
     private var selectedTheme: AppTheme {
@@ -86,10 +92,7 @@ struct ContentView: View {
                         VStack(spacing: 0) {
                             ForEach(selectedWords, id: \.self) { word in
                                 
-                                // Max font scales with device height
-                                let maxFontSize = geo.size.height * 0.18
-                                
-                                // Start large but cap it intelligently
+                                let maxFontSize = geo.size.height * 0.35
                                 let calculatedSize = min(geo.size.width, maxFontSize)
                                 
                                 Text(word)
@@ -100,11 +103,31 @@ struct ContentView: View {
                                     .multilineTextAlignment(.center)
                                     .frame(
                                         width: geo.size.width,
-                                        height: geo.size.height / CGFloat(selectedWords.count),
-                                        alignment: .center
+                                        height: geo.size.height / CGFloat(selectedWords.count)
+                                    )
+                                    // Swipe left gesture
+                                    .gesture(
+                                        DragGesture()
+                                            .onEnded { value in
+                                                if value.translation.width < -100 {
+                                                    handleLeftSwipe()
+                                                }
+                                            }
+                                    )
+                                    // Long press copy + vibrate after 0.4s hold
+                                    .simultaneousGesture(
+                                        LongPressGesture(minimumDuration: 0.4)
+                                            .onEnded { _ in
+                                                // Vibrate and copy immediately after 0.4s hold
+                                                UIPasteboard.general.string = word
+                                                let generator = UIImpactFeedbackGenerator(style: .medium)
+                                                generator.impactOccurred()
+                                            }
                                     )
                             }
                         }
+                        .offset(x: swipeOffset)
+                        .animation(.easeInOut(duration: 0.25), value: swipeOffset)
                     }
                 }
                 
@@ -121,7 +144,45 @@ struct ContentView: View {
             selectRandomWords()
         }
     }
-
+    
+    // MARK: - Swipe Handling
+    
+    private func handleLeftSwipe() {
+        guard !selectedWords.isEmpty else { return }
+        
+        withAnimation {
+            swipeOffset = -500
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            addToOwnVocab(selectedWords)
+            selectRandomWords()
+            swipeOffset = 0
+        }
+    }
+    
+    private func addToOwnVocab(_ wordsToAdd: [String]) {
+        let fileURL = getOwnVocabURL()
+        
+        var existing: Set<String> = []
+        
+        if FileManager.default.fileExists(atPath: fileURL.path),
+           let content = try? String(contentsOf: fileURL) {
+            existing = Set(content.components(separatedBy: .newlines))
+        }
+        
+        for word in wordsToAdd {
+            existing.insert(word)
+        }
+        
+        let newContent = existing.sorted().joined(separator: "\n")
+        try? newContent.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+    
+    private func getOwnVocabURL() -> URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ownVocab.csv")
+    }
     
     // MARK: - Toolbar
     
@@ -227,15 +288,26 @@ struct ContentView: View {
         allWordsPerCSV.removeAll()
         
         for csv in selectedCSVs {
-            guard let path = Bundle.main.path(forResource: csv, ofType: "csv"),
-                  let content = try? String(contentsOfFile: path)
-            else { continue }
             
-            let lines = content.components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+            let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("\(csv).csv")
             
-            allWordsPerCSV[csv] = lines
+            var content: String?
+            
+            if FileManager.default.fileExists(atPath: documentsURL.path) {
+                content = try? String(contentsOf: documentsURL)
+            } else if let bundlePath = Bundle.main.path(forResource: csv, ofType: "csv") {
+                content = try? String(contentsOfFile: bundlePath)
+            }
+            
+            if let content = content {
+                let lines = content
+                    .components(separatedBy: .newlines)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                
+                allWordsPerCSV[csv] = lines
+            }
         }
         
         selectRandomWords()
