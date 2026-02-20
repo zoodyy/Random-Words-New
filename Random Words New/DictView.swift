@@ -145,6 +145,14 @@ struct DictView: View {
         .onAppear {
             loadUserCSVs()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .csvDeleted)) { notification in
+            if let deletedName = notification.object as? String {
+                csvFiles.removeAll { $0 == deletedName }
+                selectedCSVs.remove(deletedName)
+                csvRanges[deletedName] = nil
+                sliderChangeTrigger += 1
+            }
+        }
     }
     
     // MARK: - Create New CSV

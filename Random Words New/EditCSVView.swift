@@ -1,6 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+extension Notification.Name {
+    static let csvDeleted = Notification.Name("csvDeleted")
+}
+
 struct EditCSVView: View {
     
     let csvFileName: String
@@ -63,7 +67,6 @@ struct EditCSVView: View {
             .navigationTitle("\(csvFileName).csv")
             .toolbar {
                 
-                // Sort Menu
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         ForEach(SortMode.allCases, id: \.self) { mode in
@@ -82,7 +85,6 @@ struct EditCSVView: View {
                     }
                 }
                 
-                // Share Button (LEFT of Save)
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     
                     ShareLink(
@@ -92,7 +94,7 @@ struct EditCSVView: View {
                         Image(systemName: "square.and.arrow.up")
                     }
                     .onTapGesture {
-                        saveCSV() // ensure latest changes are saved before sharing
+                        saveCSV()
                     }
                     
                     Button("Save") {
@@ -100,6 +102,18 @@ struct EditCSVView: View {
                         dismiss()
                     }
                 }
+            }
+            .alert("Delete CSV File?",
+                   isPresented: $showingDeleteConfirmation) {
+                
+                Button("Delete", role: .destructive) {
+                    deleteCSVFile()
+                }
+                
+                Button("Cancel", role: .cancel) { }
+                
+            } message: {
+                Text("This will permanently delete this CSV file.")
             }
             .onAppear {
                 ensureFileExistsInDocuments()
@@ -118,6 +132,27 @@ struct EditCSVView: View {
                     }
                 }
             }
+        }
+    }
+    
+    private func deleteCSVFile() {
+        let fileURL = getDocumentsURL()
+        
+        do {
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                try FileManager.default.removeItem(at: fileURL)
+            }
+            
+            // Notify DictView
+            NotificationCenter.default.post(
+                name: .csvDeleted,
+                object: csvFileName
+            )
+            
+            dismiss()
+            
+        } catch {
+            print("Failed to delete CSV: \(error)")
         }
     }
     
