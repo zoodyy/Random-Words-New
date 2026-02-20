@@ -192,6 +192,8 @@ struct ContentView: View {
     private func handleUpSwipe() {
         guard let word = selectedWords.first else { return }
         
+        pauseTimer()
+        
         // Vertical fly-up animation
         withAnimation(.easeInOut(duration: 0.25)) {
             swipeUpOffset = -400
