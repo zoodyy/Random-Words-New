@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct DictView: View {
     
@@ -17,8 +18,16 @@ struct DictView: View {
     ]
     
     @State private var csvToEdit: String?
-    @State private var showingAddAlert = false
+    
+    // Create New
+    @State private var showingNewCSVAlert = false
     @State private var newCSVName = ""
+    
+    // Import
+    @State private var showingImportPicker = false
+    
+    // Add menu
+    @State private var showingAddOptions = false
     
     // Keeps selected files at top (preserving order)
     private var orderedCSVFiles: [String] {
@@ -91,21 +100,30 @@ struct DictView: View {
         }
         .navigationTitle("Select Word Lists")
         .toolbar {
-            
-            // Add Button
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    showingAddAlert = true
+                    showingAddOptions = true
                 } label: {
                     Image(systemName: "plus")
                 }
             }
         }
         .navigationDestination(item: $csvToEdit) { file in
-            // ✅ FIX IS HERE
             EditCSVView(csvFileName: file, scrollToWord: nil)
         }
-        .alert("New CSV File", isPresented: $showingAddAlert) {
+        .confirmationDialog("Add CSV", isPresented: $showingAddOptions) {
+            
+            Button("Create New CSV") {
+                showingNewCSVAlert = true
+            }
+            
+            Button("Import CSV from Files") {
+                showingImportPicker = true
+            }
+            
+            Button("Cancel", role: .cancel) { }
+        }
+        .alert("New CSV File", isPresented: $showingNewCSVAlert) {
             TextField("File name", text: $newCSVName)
             
             Button("Create") {
@@ -116,6 +134,13 @@ struct DictView: View {
             
         } message: {
             Text("Enter a name for your new CSV file.")
+        }
+        .fileImporter(
+            isPresented: $showingImportPicker,
+            allowedContentTypes: [UTType.commaSeparatedText],
+            allowsMultipleSelection: false
+        ) { result in
+            handleImport(result: result)
         }
         .onAppear {
             loadUserCSVs()
@@ -134,18 +159,59 @@ struct DictView: View {
         
         let url = getDocumentsURL(for: trimmed)
         
-        // Create empty file
         try? "".write(to: url, atomically: true, encoding: .utf8)
         
-        // Insert at top
         csvFiles.insert(trimmed, at: 0)
-        
-        // Auto select
         selectedCSVs.insert(trimmed)
         csvRanges[trimmed] = (0.0, 1.0)
         
         newCSVName = ""
         sliderChangeTrigger += 1
+    }
+    
+    // MARK: - Import CSV
+    
+    private func handleImport(result: Result<[URL], Error>) {
+        do {
+            guard let selectedFile = try result.get().first else { return }
+            
+            let accessing = selectedFile.startAccessingSecurityScopedResource()
+            defer {
+                if accessing {
+                    selectedFile.stopAccessingSecurityScopedResource()
+                }
+            }
+            
+            let fileName = selectedFile
+                .deletingPathExtension()
+                .lastPathComponent
+            
+            let cleanedName = fileName
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: ".csv", with: "")
+            
+            guard !cleanedName.isEmpty else { return }
+            
+            let destinationURL = getDocumentsURL(for: cleanedName)
+            
+            // If file exists, remove it (overwrite behavior)
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+            
+            try FileManager.default.copyItem(at: selectedFile, to: destinationURL)
+            
+            if !csvFiles.contains(cleanedName) {
+                csvFiles.insert(cleanedName, at: 0)
+            }
+            
+            selectedCSVs.insert(cleanedName)
+            csvRanges[cleanedName] = (0.0, 1.0)
+            sliderChangeTrigger += 1
+            
+        } catch {
+            print("Import failed: \(error)")
+        }
     }
     
     // MARK: - Load Existing User CSVs
@@ -157,7 +223,7 @@ struct DictView: View {
                                                                      includingPropertiesForKeys: nil) {
             
             let csvNames = files
-                .filter { $0.pathExtension == "csv" }
+                .filter { $0.pathExtension.lowercased() == "csv" }
                 .map { $0.deletingPathExtension().lastPathComponent }
             
             for name in csvNames {
