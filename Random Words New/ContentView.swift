@@ -36,9 +36,9 @@ struct ContentView: View {
     @State private var allWordsPerCSV: [String: [String]] = [:]
     
     @State private var swipeOffset: CGFloat = 0
+    @State private var swipeUpOffset: CGFloat = 0
     @State private var longPressTimer: Timer?
     
-    // ✅ NEW
     @State private var navigateToCSV: String?
     @State private var selectedWordSource: (csv: String, word: String)?
     
@@ -130,8 +130,9 @@ struct ContentView: View {
                                     )
                             }
                         }
-                        .offset(x: swipeOffset)
+                        .offset(x: swipeOffset, y: swipeUpOffset)
                         .animation(.easeInOut(duration: 0.25), value: swipeOffset)
+                        .animation(.easeInOut(duration: 0.25), value: swipeUpOffset)
                     }
                 }
                 
@@ -143,7 +144,6 @@ struct ContentView: View {
             }
         }
         .contentShape(Rectangle())
-        // ✅ Swipe Up
         .gesture(
             DragGesture()
                 .onEnded { value in
@@ -177,12 +177,24 @@ struct ContentView: View {
     private func handleUpSwipe() {
         guard let word = selectedWords.first else { return }
         
-        for csv in selectedCSVs {
-            if let words = allWordsPerCSV[csv],
-               words.contains(word) {
-                selectedWordSource = (csv, word)
-                navigateToCSV = csv
-                break
+        // Vertical fly-up animation
+        withAnimation(.easeInOut(duration: 0.25)) {
+            swipeUpOffset = -400
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            
+            for csv in selectedCSVs {
+                if let words = allWordsPerCSV[csv],
+                   words.contains(word) {
+                    
+                    selectedWordSource = (csv, word)
+                    
+                    // Reset offset before navigating
+                    swipeUpOffset = 0
+                    navigateToCSV = csv
+                    break
+                }
             }
         }
     }
