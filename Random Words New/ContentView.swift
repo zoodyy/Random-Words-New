@@ -107,6 +107,7 @@ struct ContentView: View {
                                 Text(word)
                                     .font(.system(size: calculatedSize))
                                     .bold()
+                                    .foregroundColor(getTextColor)
                                     .minimumScaleFactor(0.1)
                                     .lineLimit(1)
                                     .multilineTextAlignment(.center)
@@ -398,4 +399,13 @@ struct ContentView: View {
     private func resumeTimer() {
         updateTimer()
     }
+    
+    private var getTextColor: Color {
+        if timer == nil {
+            return Color.gray
+        }else {
+            return Color.white
+        }
+    }
+    
 }
