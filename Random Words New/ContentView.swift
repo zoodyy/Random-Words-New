@@ -306,6 +306,7 @@ struct ContentView: View {
     }
     
     private func selectRandomWords() {
+        updateTimer()
         if fairWordDistribution {
             selectedWords = generateFairWords()
         } else {
