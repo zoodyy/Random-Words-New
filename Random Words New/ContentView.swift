@@ -39,6 +39,8 @@ struct ContentView: View {
     @State private var swipeUpOffset: CGFloat = 0
     @State private var longPressTimer: Timer?
     
+    @GestureState private var isPressing = false
+    
     @State private var navigateToCSV: String?
     @State private var selectedWordSource: (csv: String, word: String)?
     
@@ -122,7 +124,19 @@ struct ContentView: View {
                                     )
                                     .simultaneousGesture(
                                         LongPressGesture(minimumDuration: 0.4)
+                                            .updating($isPressing) { currentState, gestureState, _ in
+                                                gestureState = currentState
+                                            }
+                                            .onChanged { _ in
+                                                if timer == nil {
+                                                    resumeTimer()
+                                                }else {
+                                                    pauseTimer()
+                                                }
+                                            }
                                             .onEnded { _ in
+                                                resumeTimer()
+                                                
                                                 UIPasteboard.general.string = word
                                                 let generator = UIImpactFeedbackGenerator(style: .medium)
                                                 generator.impactOccurred()
@@ -374,5 +388,14 @@ struct ContentView: View {
     private func loadPersistedData() {
         selectedCSVs = (try? JSONDecoder().decode(Set<String>.self, from: selectedCSVsData)) ?? []
         csvRanges = (try? JSONDecoder().decode([String: RangePair].self, from: csvRangesData)) ?? [:]
+    }
+    
+    private func pauseTimer() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func resumeTimer() {
+        updateTimer()
     }
 }

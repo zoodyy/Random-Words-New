@@ -49,7 +49,7 @@ struct EditCSVView: View {
                             .id(words[index])
                             .listRowBackground(
                                 highlightedWord == words[index]
-                                ? Color.yellow.opacity(0.5)
+                                ? Color.gray.opacity(0.5)
                                 : Color.clear
                             )
                     }
