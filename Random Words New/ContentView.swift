@@ -1,4 +1,3 @@
-
 import SwiftUI
 
 struct ContentView: View {
@@ -36,11 +35,12 @@ struct ContentView: View {
     @State private var sliderChangeTrigger = 0
     @State private var allWordsPerCSV: [String: [String]] = [:]
     
-    // Swipe animation state
     @State private var swipeOffset: CGFloat = 0
-    
-    // Long press timer
     @State private var longPressTimer: Timer?
+    
+    // ✅ NEW
+    @State private var navigateToCSV: String?
+    @State private var selectedWordSource: (csv: String, word: String)?
     
     // MARK: - Theme
     
@@ -56,12 +56,18 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Body
-    
     var body: some View {
         NavigationStack {
             mainContent()
                 .toolbar { toolbarMenu() }
+                .navigationDestination(item: $navigateToCSV) { csv in
+                    if let source = selectedWordSource {
+                        EditCSVView(
+                            csvFileName: csv,
+                            scrollToWord: source.word
+                        )
+                    }
+                }
                 .onAppear {
                     loadPersistedData()
                     loadCSVs()
@@ -106,7 +112,6 @@ struct ContentView: View {
                                         width: geo.size.width,
                                         height: geo.size.height / CGFloat(selectedWords.count)
                                     )
-                                    // Swipe left gesture
                                     .gesture(
                                         DragGesture()
                                             .onEnded { value in
@@ -115,11 +120,9 @@ struct ContentView: View {
                                                 }
                                             }
                                     )
-                                    // Long press copy + vibrate after 0.4s hold
                                     .simultaneousGesture(
                                         LongPressGesture(minimumDuration: 0.4)
                                             .onEnded { _ in
-                                                // Vibrate and copy immediately after 0.4s hold
                                                 UIPasteboard.general.string = word
                                                 let generator = UIImpactFeedbackGenerator(style: .medium)
                                                 generator.impactOccurred()
@@ -140,6 +143,15 @@ struct ContentView: View {
             }
         }
         .contentShape(Rectangle())
+        // ✅ Swipe Up
+        .gesture(
+            DragGesture()
+                .onEnded { value in
+                    if value.translation.height < -100 {
+                        handleUpSwipe()
+                    }
+                }
+        )
         .onTapGesture {
             guard !filteredWords.isEmpty else { return }
             selectRandomWords()
@@ -162,12 +174,24 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - addToOwnVocab (FIXED)
-    // Preserve insertion order and avoid alphabetizing the file.
+    private func handleUpSwipe() {
+        guard let word = selectedWords.first else { return }
+        
+        for csv in selectedCSVs {
+            if let words = allWordsPerCSV[csv],
+               words.contains(word) {
+                selectedWordSource = (csv, word)
+                navigateToCSV = csv
+                break
+            }
+        }
+    }
+    
+    // MARK: - addToOwnVocab (RESTORED)
+    
     private func addToOwnVocab(_ wordsToAdd: [String]) {
         let fileURL = getOwnVocabURL()
         
-        // Read existing content into ordered array
         var existingOrdered: [String] = []
         if FileManager.default.fileExists(atPath: fileURL.path),
            let content = try? String(contentsOf: fileURL) {
@@ -177,14 +201,12 @@ struct ContentView: View {
                 .filter { !$0.isEmpty }
         }
         
-        // Append new words preserving order and avoiding duplicates
         for word in wordsToAdd {
             if !existingOrdered.contains(word) {
                 existingOrdered.append(word)
             }
         }
         
-        // Write back in insertion order (no sorting)
         let newContent = existingOrdered.joined(separator: "\n")
         try? newContent.write(to: fileURL, atomically: true, encoding: .utf8)
     }
@@ -194,7 +216,7 @@ struct ContentView: View {
             .appendingPathComponent("ownVocab.csv")
     }
     
-    // MARK: - Toolbar
+    // MARK: - Toolbar (RESTORED)
     
     @ToolbarContentBuilder
     private func toolbarMenu() -> some ToolbarContent {
@@ -233,7 +255,7 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Filtering
+    // MARK: - Remaining Logic (UNCHANGED)
     
     private var filteredWords: [String] {
         var combined: [String] = []
@@ -253,8 +275,6 @@ struct ContentView: View {
         
         return combined
     }
-    
-    // MARK: - Random
     
     private func selectRandomWords() {
         if fairWordDistribution {
@@ -292,8 +312,6 @@ struct ContentView: View {
         return results
     }
     
-    // MARK: - CSV Loading
-    
     private func loadCSVs() {
         allWordsPerCSV.removeAll()
         
@@ -324,8 +342,6 @@ struct ContentView: View {
         updateTimer()
     }
     
-    // MARK: - Timer
-    
     private func updateTimer() {
         timer?.invalidate()
         guard switchInterval > 0 else { return }
@@ -334,8 +350,6 @@ struct ContentView: View {
             selectRandomWords()
         }
     }
-    
-    // MARK: - Persistence
     
     private func saveCSVs() {
         selectedCSVsData = (try? JSONEncoder().encode(selectedCSVs)) ?? Data()

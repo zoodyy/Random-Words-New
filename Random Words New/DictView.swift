@@ -7,7 +7,6 @@ struct DictView: View {
     @Binding var csvRanges: [String: (Double, Double)]
     @Binding var sliderChangeTrigger: Int
     
-    // ✅ Now dynamic
     @State private var csvFiles: [String] = [
         "ownVocab",
         "333kWordsEnglishByFreq",
@@ -103,7 +102,8 @@ struct DictView: View {
             }
         }
         .navigationDestination(item: $csvToEdit) { file in
-            EditCSVView(csvFileName: file)
+            // ✅ FIX IS HERE
+            EditCSVView(csvFileName: file, scrollToWord: nil)
         }
         .alert("New CSV File", isPresented: $showingAddAlert) {
             TextField("File name", text: $newCSVName)
