@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct EditCSVView: View {
     
@@ -61,6 +62,8 @@ struct EditCSVView: View {
             }
             .navigationTitle("\(csvFileName).csv")
             .toolbar {
+                
+                // Sort Menu
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         ForEach(SortMode.allCases, id: \.self) { mode in
@@ -79,7 +82,19 @@ struct EditCSVView: View {
                     }
                 }
                 
-                ToolbarItem(placement: .topBarTrailing) {
+                // Share Button (LEFT of Save)
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    
+                    ShareLink(
+                        item: getDocumentsURL(),
+                        preview: SharePreview("\(csvFileName).csv")
+                    ) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .onTapGesture {
+                        saveCSV() // ensure latest changes are saved before sharing
+                    }
+                    
                     Button("Save") {
                         saveCSV()
                         dismiss()
