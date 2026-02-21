@@ -176,6 +176,9 @@ struct ContentView: View {
     // MARK: - Swipe Handling
     
     private func handleLeftSwipe() {
+        
+        pauseTimer()
+        
         guard !selectedWords.isEmpty else { return }
         
         withAnimation {
