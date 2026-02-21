@@ -46,7 +46,10 @@ struct EditCSVView: View {
                 Section {
                     ForEach(words.indices, id: \.self) { index in
                         TextField("Word", text: $words[index])
-                            .id(words[index])
+                            .id(index)
+                            .onChange(of: words[index]) { _ in
+                                syncToOriginalOrder()
+                            }
                             .listRowBackground(
                                 highlightedWord == words[index]
                                 ? Color.gray.opacity(0.5)
@@ -120,10 +123,11 @@ struct EditCSVView: View {
                 loadCSV()
                 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    if let word = scrollToWord {
+                    if let word = scrollToWord,
+                       let index = words.firstIndex(of: word) {
                         highlightedWord = word
                         withAnimation {
-                            proxy.scrollTo(word, anchor: .center)
+                            proxy.scrollTo(index, anchor: .center)
                         }
                         
                         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
@@ -131,6 +135,9 @@ struct EditCSVView: View {
                         }
                     }
                 }
+            }
+            .onDisappear {
+                saveCSV() // ✅ Auto-save when going back
             }
         }
     }
@@ -143,7 +150,6 @@ struct EditCSVView: View {
                 try FileManager.default.removeItem(at: fileURL)
             }
             
-            // Notify DictView
             NotificationCenter.default.post(
                 name: .csvDeleted,
                 object: csvFileName
@@ -179,6 +185,7 @@ struct EditCSVView: View {
     }
     
     private func saveCSV() {
+        syncToOriginalOrder() // ✅ Ensure edits are synced before saving
         let fileURL = getDocumentsURL()
         let content = originalOrder.joined(separator: "\n")
         try? content.write(to: fileURL, atomically: true, encoding: .utf8)
@@ -203,6 +210,17 @@ struct EditCSVView: View {
             words = originalOrder.sorted {
                 $0.localizedCaseInsensitiveCompare($1) == .orderedDescending
             }
+        }
+    }
+    
+    private func syncToOriginalOrder() {
+        switch sortMode {
+        case .original:
+            originalOrder = words
+        case .reverseOriginal:
+            originalOrder = Array(words.reversed())
+        case .alphabetical, .reverseAlphabetical:
+            originalOrder = words
         }
     }
     
