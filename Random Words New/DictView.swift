@@ -64,8 +64,18 @@ struct DictView: View {
                     // MARK: - Sliders
                     if selectedCSVs.contains(file) {
                         let range = csvRanges[file] ?? (0.0, 1.0)
+                        let wordsForFile = loadWords(for: file)
                         
-                        Text("\(Int(range.0*100))% - \(Int(range.1*100))%")
+                        let lowerIndex = wordsForFile.isEmpty ? 0 :
+                            min(Int(Double(wordsForFile.count - 1) * range.0), wordsForFile.count - 1)
+                        
+                        let upperIndex = wordsForFile.isEmpty ? 0 :
+                            min(Int(Double(wordsForFile.count - 1) * range.1), wordsForFile.count - 1)
+                        
+                        let lowerWord = wordsForFile.indices.contains(lowerIndex) ? wordsForFile[lowerIndex] : "-"
+                        let upperWord = wordsForFile.indices.contains(upperIndex) ? wordsForFile[upperIndex] : "-"
+                        
+                        Text("\(Int(range.0*100))% (\(lowerWord))  -  \(Int(range.1*100))% (\(upperWord))")
                             .font(.subheadline)
                             .foregroundColor(.gray)
                         
@@ -155,6 +165,20 @@ struct DictView: View {
         }
     }
     
+    // MARK: - Load Words For Boundary Display
+    
+    private func loadWords(for file: String) -> [String] {
+        let url = getDocumentsURL(for: file)
+        
+        if let content = try? String(contentsOf: url) {
+            return content
+                .components(separatedBy: .newlines)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        }
+        
+        return []
+    }
+    
     // MARK: - Create New CSV
     
     private func createNewCSV() {
@@ -202,7 +226,6 @@ struct DictView: View {
             
             let destinationURL = getDocumentsURL(for: cleanedName)
             
-            // If file exists, remove it (overwrite behavior)
             if FileManager.default.fileExists(atPath: destinationURL.path) {
                 try FileManager.default.removeItem(at: destinationURL)
             }
