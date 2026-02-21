@@ -44,6 +44,20 @@ struct ContentView: View {
     @State private var navigateToCSV: String?
     @State private var selectedWordSource: (csv: String, word: String)?
     
+    // MARK: - Shared Swipe Gesture (NEW)
+    
+    private var swipeGesture: some Gesture {
+        DragGesture()
+            .onEnded { value in
+                if value.translation.width < -100 {
+                    handleLeftSwipe()
+                }
+                if value.translation.height < -100 {
+                    handleUpSwipe()
+                }
+            }
+    }
+    
     // MARK: - Theme
     
     private var selectedTheme: AppTheme {
@@ -115,14 +129,7 @@ struct ContentView: View {
                                         width: geo.size.width,
                                         height: geo.size.height / CGFloat(selectedWords.count)
                                     )
-                                    .gesture(
-                                        DragGesture()
-                                            .onEnded { value in
-                                                if value.translation.width < -100 {
-                                                    handleLeftSwipe()
-                                                }
-                                            }
-                                    )
+                                    .gesture(swipeGesture)
                                     .simultaneousGesture(
                                         LongPressGesture(minimumDuration: 0.4)
                                             .updating($isPressing) { currentState, gestureState, _ in
@@ -159,14 +166,7 @@ struct ContentView: View {
             }
         }
         .contentShape(Rectangle())
-        .gesture(
-            DragGesture()
-                .onEnded { value in
-                    if value.translation.height < -100 {
-                        handleUpSwipe()
-                    }
-                }
-        )
+        .gesture(swipeGesture)
         .onTapGesture {
             guard !filteredWords.isEmpty else { return }
             selectRandomWords()
@@ -194,7 +194,6 @@ struct ContentView: View {
         
         pauseTimer()
         
-        // Vertical fly-up animation
         withAnimation(.easeInOut(duration: 0.25)) {
             swipeUpOffset = -400
         }
@@ -207,7 +206,6 @@ struct ContentView: View {
                     
                     selectedWordSource = (csv, word)
                     
-                    // Reset offset before navigating
                     swipeUpOffset = 0
                     navigateToCSV = csv
                     break
@@ -216,7 +214,7 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - addToOwnVocab (RESTORED)
+    // MARK: - Remaining Logic (UNCHANGED)
     
     private func addToOwnVocab(_ wordsToAdd: [String]) {
         let fileURL = getOwnVocabURL()
@@ -244,8 +242,6 @@ struct ContentView: View {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ownVocab.csv")
     }
-    
-    // MARK: - Toolbar (RESTORED)
     
     @ToolbarContentBuilder
     private func toolbarMenu() -> some ToolbarContent {
@@ -284,7 +280,7 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Remaining Logic (UNCHANGED)
+    // Remaining logic unchanged below...
     
     private var filteredWords: [String] {
         var combined: [String] = []
