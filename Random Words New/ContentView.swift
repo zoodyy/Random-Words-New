@@ -407,13 +407,7 @@ struct ContentView: View {
         if timer == nil {
             return Color.gray
         }else {
-            if colorScheme == .dark {
-                return Color.white
-            }else if colorScheme == .light{
-                return Color.black
-            }
+            return Color.primary
         }
-        return Color.black
     }
-    
 }
