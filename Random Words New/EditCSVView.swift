@@ -18,6 +18,9 @@ struct EditCSVView: View {
     @State private var sortMode: SortMode = .reverseOriginal
     @State private var showingDeleteConfirmation = false
     
+    @State private var isSearching: Bool = false
+    @State private var searchText: String = ""
+    
     @Environment(\.dismiss) private var dismiss
     
     enum SortMode: String, CaseIterable {
@@ -27,9 +30,26 @@ struct EditCSVView: View {
         case reverseAlphabetical = "Reverse Alphabetical"
     }
     
+    private var filteredWords: [String] {
+        if searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+            return words
+        } else {
+            return words.filter {
+                $0.localizedCaseInsensitiveContains(searchText)
+            }
+        }
+    }
+    
     var body: some View {
         ScrollViewReader { proxy in
             List {
+                
+                if isSearching {
+                    Section {
+                        TextField("Search", text: $searchText)
+                            .textInputAutocapitalization(.never)
+                    }
+                }
                 
                 Section(header: Text("Add New Word")) {
                     HStack {
@@ -44,19 +64,27 @@ struct EditCSVView: View {
                 }
                 
                 Section {
-                    ForEach(words.indices, id: \.self) { index in
-                        TextField("Word", text: $words[index])
-                            .id(index)
-                            .onChange(of: words[index]) { _ in
-                                syncToOriginalOrder()
-                            }
-                            .listRowBackground(
-                                highlightedWord == words[index]
-                                ? Color.gray.opacity(0.5)
-                                : Color.clear
-                            )
+                    ForEach(filteredWords.indices, id: \.self) { index in
+                        let word = filteredWords[index]
+                        if let realIndex = words.firstIndex(of: word) {
+                            TextField("Word", text: $words[realIndex])
+                                .id(realIndex)
+                                .onChange(of: words[realIndex]) { _ in
+                                    syncToOriginalOrder()
+                                }
+                                .listRowBackground(
+                                    highlightedWord == word
+                                    ? Color.gray.opacity(0.5)
+                                    : Color.clear
+                                )
+                        }
                     }
-                    .onDelete(perform: deleteWords)
+                    .onDelete { offsets in
+                        let wordsToDelete = offsets.map { filteredWords[$0] }
+                        words.removeAll { wordsToDelete.contains($0) }
+                        originalOrder.removeAll { wordsToDelete.contains($0) }
+                        saveCSV()
+                    }
                 }
                 
                 Section {
@@ -100,9 +128,13 @@ struct EditCSVView: View {
                         saveCSV()
                     }
                     
-                    Button("Save") {
-                        saveCSV()
-                        dismiss()
+                    Button {
+                        isSearching.toggle()
+                        if !isSearching {
+                            searchText = ""
+                        }
+                    } label: {
+                        Image(systemName: "magnifyingglass")
                     }
                 }
             }
@@ -137,7 +169,7 @@ struct EditCSVView: View {
                 }
             }
             .onDisappear {
-                saveCSV() // ✅ Auto-save when going back
+                saveCSV()
             }
         }
     }
@@ -185,7 +217,7 @@ struct EditCSVView: View {
     }
     
     private func saveCSV() {
-        syncToOriginalOrder() // ✅ Ensure edits are synced before saving
+        syncToOriginalOrder()
         let fileURL = getDocumentsURL()
         let content = originalOrder.joined(separator: "\n")
         try? content.write(to: fileURL, atomically: true, encoding: .utf8)
@@ -236,15 +268,6 @@ struct EditCSVView: View {
         originalOrder.append(trimmed)
         newWord = ""
         applyCurrentSort()
-        saveCSV()
-    }
-    
-    private func deleteWords(at offsets: IndexSet) {
-        let removedWords = offsets.map { words[$0] }
-        
-        words.remove(atOffsets: offsets)
-        originalOrder.removeAll { removedWords.contains($0) }
-        
         saveCSV()
     }
 }
