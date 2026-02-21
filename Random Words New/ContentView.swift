@@ -394,12 +394,17 @@ struct ContentView: View {
     }
     
     private func pauseTimer() {
-        timer?.invalidate()
-        timer = nil
+        if switchInterval > 0 {
+            timer?.invalidate()
+            timer = nil
+        }
+
     }
 
     private func resumeTimer() {
-        updateTimer()
+        if switchInterval > 0 {
+            updateTimer()
+        }
     }
     
     private var getTextColor: Color {
