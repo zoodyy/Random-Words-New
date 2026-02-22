@@ -6,49 +6,51 @@ extension Notification.Name {
 }
 
 struct EditCSVView: View {
-    
+
     let csvFileName: String
     let scrollToWord: String?
-    
-    @State private var words: [String] = []
-    @State private var originalOrder: [String] = []
+
+    @State private var words: [String] = []                 // what user currently sees (sorted / filtered order)
+    @State private var originalOrder: [String] = []         // true CSV order (what gets saved)
+    @State private var displayedIndices: [Int] = []         // mapping: words[i] corresponds to originalOrder[displayedIndices[i]]
+
     @State private var newWord: String = ""
     @State private var highlightedWord: String?
-    
+
     @State private var sortMode: SortMode = .reverseOriginal
     @State private var showingDeleteConfirmation = false
-    
+
     @Environment(\.dismiss) private var dismiss
-    
+
     enum SortMode: String, CaseIterable {
         case original = "CSV Order"
         case reverseOriginal = "Reverse CSV Order"
         case alphabetical = "Alphabetical"
         case reverseAlphabetical = "Reverse Alphabetical"
     }
-    
+
     var body: some View {
         ScrollViewReader { proxy in
             List {
-                
+
                 Section(header: Text("Add New Word")) {
                     HStack {
                         TextField("New word", text: $newWord)
                             .textInputAutocapitalization(.never)
-                        
+
                         Button("Add") {
                             addWord()
                         }
                         .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }
-                
+
                 Section {
                     ForEach(words.indices, id: \.self) { index in
                         TextField("Word", text: $words[index])
                             .id(index)
                             .onChange(of: words[index]) { _ in
-                                syncToOriginalOrder()
+                                updateOriginalOrder(fromDisplayedIndex: index)
                             }
                             .listRowBackground(
                                 highlightedWord == words[index]
@@ -58,7 +60,7 @@ struct EditCSVView: View {
                     }
                     .onDelete(perform: deleteWords)
                 }
-                
+
                 Section {
                     Button(role: .destructive) {
                         showingDeleteConfirmation = true
@@ -69,7 +71,7 @@ struct EditCSVView: View {
             }
             .navigationTitle("\(csvFileName).csv")
             .toolbar {
-                
+
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         ForEach(SortMode.allCases, id: \.self) { mode in
@@ -87,9 +89,9 @@ struct EditCSVView: View {
                         Label("Sort", systemImage: "arrow.up.arrow.down")
                     }
                 }
-                
+
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    
+
                     ShareLink(
                         item: getDocumentsURL(),
                         preview: SharePreview("\(csvFileName).csv")
@@ -99,7 +101,7 @@ struct EditCSVView: View {
                     .onTapGesture {
                         saveCSV()
                     }
-                    
+
                     Button("Save") {
                         saveCSV()
                         dismiss()
@@ -108,20 +110,20 @@ struct EditCSVView: View {
             }
             .alert("Delete CSV File?",
                    isPresented: $showingDeleteConfirmation) {
-                
+
                 Button("Delete", role: .destructive) {
                     deleteCSVFile()
                 }
-                
+
                 Button("Cancel", role: .cancel) { }
-                
+
             } message: {
                 Text("This will permanently delete this CSV file.")
             }
             .onAppear {
                 ensureFileExistsInDocuments()
                 loadCSV()
-                
+
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     if let word = scrollToWord,
                        let index = words.firstIndex(of: word) {
@@ -129,7 +131,7 @@ struct EditCSVView: View {
                         withAnimation {
                             proxy.scrollTo(index, anchor: .center)
                         }
-                        
+
                         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                             highlightedWord = nil
                         }
@@ -141,110 +143,119 @@ struct EditCSVView: View {
             }
         }
     }
-    
+
     private func deleteCSVFile() {
         let fileURL = getDocumentsURL()
-        
+
         do {
             if FileManager.default.fileExists(atPath: fileURL.path) {
                 try FileManager.default.removeItem(at: fileURL)
             }
-            
+
             NotificationCenter.default.post(
                 name: .csvDeleted,
                 object: csvFileName
             )
-            
+
             dismiss()
-            
+
         } catch {
             print("Failed to delete CSV: \(error)")
         }
     }
-    
+
     private func ensureFileExistsInDocuments() {
         let docURL = getDocumentsURL()
-        
+
         if !FileManager.default.fileExists(atPath: docURL.path) {
             if let bundlePath = Bundle.main.path(forResource: csvFileName, ofType: "csv") {
                 try? FileManager.default.copyItem(atPath: bundlePath, toPath: docURL.path)
             }
         }
     }
-    
+
     private func loadCSV() {
         let fileURL = getDocumentsURL()
-        
+
         if let content = try? String(contentsOf: fileURL) {
             originalOrder = content
                 .components(separatedBy: .newlines)
                 .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         }
-        
+
         applyCurrentSort()
     }
-    
+
+    // ✅ IMPORTANT FIX: Save ALWAYS writes originalOrder (true CSV order),
+    // and never rewrites it just because the user sorted the visible list.
     private func saveCSV() {
-        syncToOriginalOrder() // ✅ Ensure edits are synced before saving
         let fileURL = getDocumentsURL()
         let content = originalOrder.joined(separator: "\n")
         try? content.write(to: fileURL, atomically: true, encoding: .utf8)
     }
-    
+
     private func changeSortMode(to mode: SortMode) {
         sortMode = mode
         applyCurrentSort()
     }
-    
+
     private func applyCurrentSort() {
         switch sortMode {
         case .original:
-            words = originalOrder
+            displayedIndices = Array(originalOrder.indices)
+
         case .reverseOriginal:
-            words = Array(originalOrder.reversed())
+            displayedIndices = Array(originalOrder.indices.reversed())
+
         case .alphabetical:
-            words = originalOrder.sorted {
-                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            displayedIndices = originalOrder.indices.sorted {
+                originalOrder[$0].localizedCaseInsensitiveCompare(originalOrder[$1]) == .orderedAscending
             }
+
         case .reverseAlphabetical:
-            words = originalOrder.sorted {
-                $0.localizedCaseInsensitiveCompare($1) == .orderedDescending
+            displayedIndices = originalOrder.indices.sorted {
+                originalOrder[$0].localizedCaseInsensitiveCompare(originalOrder[$1]) == .orderedDescending
             }
         }
+
+        words = displayedIndices.map { originalOrder[$0] }
     }
-    
-    private func syncToOriginalOrder() {
-        switch sortMode {
-        case .original:
-            originalOrder = words
-        case .reverseOriginal:
-            originalOrder = Array(words.reversed())
-        case .alphabetical, .reverseAlphabetical:
-            originalOrder = words
-        }
+
+    private func updateOriginalOrder(fromDisplayedIndex displayedIndex: Int) {
+        guard displayedIndices.indices.contains(displayedIndex) else { return }
+        let originalIndex = displayedIndices[displayedIndex]
+        guard originalOrder.indices.contains(originalIndex) else { return }
+        originalOrder[originalIndex] = words[displayedIndex]
     }
-    
+
     private func getDocumentsURL() -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("\(csvFileName).csv")
     }
-    
+
     private func addWord() {
         let trimmed = newWord.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
-        
+
         originalOrder.append(trimmed)
         newWord = ""
         applyCurrentSort()
         saveCSV()
     }
-    
+
     private func deleteWords(at offsets: IndexSet) {
-        let removedWords = offsets.map { words[$0] }
-        
-        words.remove(atOffsets: offsets)
-        originalOrder.removeAll { removedWords.contains($0) }
-        
+        // Map visible rows -> original indices, then remove from the true CSV order
+        let originalIndicesToRemove = offsets
+            .compactMap { displayedIndices.indices.contains($0) ? displayedIndices[$0] : nil }
+            .sorted(by: >) // remove from back to avoid index shifting
+
+        for idx in originalIndicesToRemove {
+            if originalOrder.indices.contains(idx) {
+                originalOrder.remove(at: idx)
+            }
+        }
+
+        applyCurrentSort()
         saveCSV()
     }
 }
