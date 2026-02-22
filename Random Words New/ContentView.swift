@@ -44,6 +44,10 @@ struct ContentView: View {
     @State private var navigateToCSV: String?
     @State private var selectedWordSource: (csv: String, word: String)?
     
+    // ✅ NEW: history for previous word(s)
+    @State private var wordHistory: [[String]] = []
+    @State private var historyIndex: Int = -1
+    
     // MARK: - Shared Swipe Gesture (NEW)
     
     private var swipeGesture: some Gesture {
@@ -51,7 +55,10 @@ struct ContentView: View {
             .onEnded { value in
                 if value.translation.width < -100 {
                     handleLeftSwipe()
+                } else if value.translation.width > 100 {
+                    handleRightSwipe()
                 }
+                
                 if value.translation.height < -100 {
                     handleUpSwipe()
                 }
@@ -91,8 +98,8 @@ struct ContentView: View {
                 .onChange(of: selectedCSVs) { _ in saveCSVs() }
                 .onChange(of: csvRanges) { _ in saveRanges() }
                 .onChange(of: switchInterval) { _ in updateTimer() }
-                .onChange(of: numberOfWordsToShow) { _ in selectRandomWords() }
-                .onChange(of: fairWordDistribution) { _ in selectRandomWords() }
+                .onChange(of: numberOfWordsToShow) { _ in selectRandomWords(recordHistory: true) }
+                .onChange(of: fairWordDistribution) { _ in selectRandomWords(recordHistory: true) }
         }
         .preferredColorScheme(colorScheme)
     }
@@ -138,7 +145,7 @@ struct ContentView: View {
                                             .onChanged { _ in
                                                 if timer == nil {
                                                     resumeTimer()
-                                                }else {
+                                                } else {
                                                     pauseTimer()
                                                 }
                                             }
@@ -169,7 +176,7 @@ struct ContentView: View {
         .gesture(swipeGesture)
         .onTapGesture {
             guard !filteredWords.isEmpty else { return }
-            selectRandomWords()
+            selectRandomWords(recordHistory: true)
         }
     }
     
@@ -178,7 +185,6 @@ struct ContentView: View {
     private func handleLeftSwipe() {
         
         pauseTimer()
-        
         guard !selectedWords.isEmpty else { return }
         
         withAnimation {
@@ -187,7 +193,24 @@ struct ContentView: View {
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             addToOwnVocab(selectedWords)
-            selectRandomWords()
+            selectRandomWords(recordHistory: true)
+            swipeOffset = 0
+        }
+    }
+    
+    // ✅ NEW: Swipe right -> show previous word(s)
+    private func handleRightSwipe() {
+        pauseTimer()
+        
+        guard !wordHistory.isEmpty, historyIndex > 0 else { return }
+        
+        withAnimation {
+            swipeOffset = 500
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            historyIndex -= 1
+            selectedWords = wordHistory[historyIndex]
             swipeOffset = 0
         }
     }
@@ -283,8 +306,6 @@ struct ContentView: View {
         }
     }
     
-    // Remaining logic unchanged below...
-    
     private var filteredWords: [String] {
         var combined: [String] = []
         
@@ -304,13 +325,33 @@ struct ContentView: View {
         return combined
     }
     
-    private func selectRandomWords() {
+    // ✅ UPDATED: can record into history, and trims "future" history if you go back then generate new
+    private func selectRandomWords(recordHistory: Bool = true) {
         updateTimer()
+        
+        let newSelection: [String]
         if fairWordDistribution {
-            selectedWords = generateFairWords()
+            newSelection = generateFairWords()
         } else {
-            selectedWords = Array(filteredWords.shuffled()
+            newSelection = Array(filteredWords.shuffled()
                 .prefix(min(numberOfWordsToShow, filteredWords.count)))
+        }
+        
+        selectedWords = newSelection
+        
+        guard recordHistory, !newSelection.isEmpty else { return }
+        
+        // If user went back in history and then generates a new word, drop the "forward" history
+        if historyIndex >= 0, historyIndex < wordHistory.count - 1 {
+            wordHistory = Array(wordHistory.prefix(historyIndex + 1))
+        }
+        
+        // Avoid duplicate consecutive entries
+        if wordHistory.last != newSelection {
+            wordHistory.append(newSelection)
+            historyIndex = wordHistory.count - 1
+        } else {
+            historyIndex = wordHistory.count - 1
         }
     }
     
@@ -367,7 +408,11 @@ struct ContentView: View {
             }
         }
         
-        selectRandomWords()
+        // ✅ start history fresh when loading
+        wordHistory.removeAll()
+        historyIndex = -1
+        
+        selectRandomWords(recordHistory: true)
         updateTimer()
     }
     
@@ -376,7 +421,7 @@ struct ContentView: View {
         guard switchInterval > 0 else { return }
         
         timer = Timer.scheduledTimer(withTimeInterval: switchInterval, repeats: true) { _ in
-            selectRandomWords()
+            selectRandomWords(recordHistory: true)
         }
     }
     
@@ -398,7 +443,6 @@ struct ContentView: View {
             timer?.invalidate()
             timer = nil
         }
-
     }
 
     private func resumeTimer() {
@@ -410,7 +454,7 @@ struct ContentView: View {
     private var getTextColor: Color {
         if timer == nil {
             return Color.gray
-        }else {
+        } else {
             return Color.primary
         }
     }
