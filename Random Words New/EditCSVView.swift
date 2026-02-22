@@ -10,9 +10,9 @@ struct EditCSVView: View {
     let csvFileName: String
     let scrollToWord: String?
 
-    @State private var words: [String] = []                 // what user currently sees (sorted / filtered order)
-    @State private var originalOrder: [String] = []         // true CSV order (what gets saved)
-    @State private var displayedIndices: [Int] = []         // mapping: words[i] corresponds to originalOrder[displayedIndices[i]]
+    @State private var words: [String] = []
+    @State private var originalOrder: [String] = []
+    @State private var displayedIndices: [Int] = []
 
     @State private var newWord: String = ""
     @State private var highlightedWord: String?
@@ -138,8 +138,13 @@ struct EditCSVView: View {
                     }
                 }
             }
+            // ✅ FIX: If you navigate back after deleting, onDisappear was re-saving and recreating the CSV.
+            // Only auto-save if the file still exists.
             .onDisappear {
-                saveCSV() // ✅ Auto-save when going back
+                let url = getDocumentsURL()
+                if FileManager.default.fileExists(atPath: url.path) {
+                    saveCSV()
+                }
             }
         }
     }
@@ -186,8 +191,6 @@ struct EditCSVView: View {
         applyCurrentSort()
     }
 
-    // ✅ IMPORTANT FIX: Save ALWAYS writes originalOrder (true CSV order),
-    // and never rewrites it just because the user sorted the visible list.
     private func saveCSV() {
         let fileURL = getDocumentsURL()
         let content = originalOrder.joined(separator: "\n")
@@ -244,10 +247,9 @@ struct EditCSVView: View {
     }
 
     private func deleteWords(at offsets: IndexSet) {
-        // Map visible rows -> original indices, then remove from the true CSV order
         let originalIndicesToRemove = offsets
             .compactMap { displayedIndices.indices.contains($0) ? displayedIndices[$0] : nil }
-            .sorted(by: >) // remove from back to avoid index shifting
+            .sorted(by: >)
 
         for idx in originalIndicesToRemove {
             if originalOrder.indices.contains(idx) {
