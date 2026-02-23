@@ -49,6 +49,9 @@ struct ContentView: View {
     @State private var wordHistory: [[String]] = []
     @State private var historyIndex: Int = -1
     
+    // ✅ Limit history to last 100 entries
+    private let maxHistoryCount: Int = 100
+    
     // MARK: - Shared Swipe Gesture
     
     private var swipeGesture: some Gesture {
@@ -393,10 +396,15 @@ struct ContentView: View {
         
         if wordHistory.last != newSelection {
             wordHistory.append(newSelection)
-            historyIndex = wordHistory.count - 1
-        } else {
-            historyIndex = wordHistory.count - 1
+            
+            // ✅ Keep only the last 100 history entries
+            if wordHistory.count > maxHistoryCount {
+                let overflow = wordHistory.count - maxHistoryCount
+                wordHistory.removeFirst(overflow)
+            }
         }
+        
+        historyIndex = wordHistory.count - 1
     }
     
     private func generateFairWords() -> [String] {
