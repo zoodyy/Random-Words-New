@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     
@@ -44,11 +45,11 @@ struct ContentView: View {
     @State private var navigateToCSV: String?
     @State private var selectedWordSource: (csv: String, word: String)?
     
-    // ✅ NEW: history for previous word(s)
+    // ✅ History for previous word(s)
     @State private var wordHistory: [[String]] = []
     @State private var historyIndex: Int = -1
     
-    // MARK: - Shared Swipe Gesture (NEW)
+    // MARK: - Shared Swipe Gesture
     
     private var swipeGesture: some Gesture {
         DragGesture()
@@ -123,40 +124,63 @@ struct ContentView: View {
                             ForEach(selectedWords, id: \.self) { word in
                                 
                                 let maxFontSize = geo.size.height * 0.2
-                                let calculatedSize = min(geo.size.width, maxFontSize)
+                                let baseFontSize = min(geo.size.width, maxFontSize)
+                                let minScale: CGFloat = 0.2
                                 
-                                Text(word)
-                                    .font(.system(size: calculatedSize))
-                                    .bold()
-                                    .foregroundColor(getTextColor)
-                                    .minimumScaleFactor(0.1)
-                                    .lineLimit(1)
-                                    .multilineTextAlignment(.center)
-                                    .frame(
-                                        width: geo.size.width,
-                                        height: geo.size.height / CGFloat(selectedWords.count)
-                                    )
-                                    .gesture(swipeGesture)
-                                    .simultaneousGesture(
-                                        LongPressGesture(minimumDuration: 0.4)
-                                            .updating($isPressing) { currentState, gestureState, _ in
-                                                gestureState = currentState
-                                            }
-                                            .onChanged { _ in
-                                                if timer == nil {
-                                                    resumeTimer()
-                                                } else {
-                                                    pauseTimer()
-                                                }
-                                            }
-                                            .onEnded { _ in
+                                // ✅ FIX AREA:
+                                // Still shrink down, but if shrinking would go below minScale,
+                                // stop shrinking and wrap (prefer spaces; otherwise allow char wrapping).
+                                let shouldWrap = needsWrapping(
+                                    text: word,
+                                    baseFontSize: baseFontSize,
+                                    availableWidth: geo.size.width,
+                                    minScale: minScale
+                                )
+                                
+                                Group {
+                                    if shouldWrap {
+                                        Text(makeBreakableText(word))
+                                            .font(.system(size: baseFontSize * minScale))
+                                            .bold()
+                                            .foregroundColor(getTextColor)
+                                            .multilineTextAlignment(.center)
+                                            .lineLimit(nil)
+                                            .minimumScaleFactor(1.0) // no further shrinking; wrapping instead
+                                    } else {
+                                        Text(word)
+                                            .font(.system(size: baseFontSize))
+                                            .bold()
+                                            .foregroundColor(getTextColor)
+                                            .minimumScaleFactor(minScale)
+                                            .lineLimit(1)
+                                            .multilineTextAlignment(.center)
+                                    }
+                                }
+                                .frame(
+                                    width: geo.size.width,
+                                    height: geo.size.height / CGFloat(selectedWords.count)
+                                )
+                                .gesture(swipeGesture)
+                                .simultaneousGesture(
+                                    LongPressGesture(minimumDuration: 0.4)
+                                        .updating($isPressing) { currentState, gestureState, _ in
+                                            gestureState = currentState
+                                        }
+                                        .onChanged { _ in
+                                            if timer == nil {
                                                 resumeTimer()
-                                                
-                                                UIPasteboard.general.string = word
-                                                let generator = UIImpactFeedbackGenerator(style: .medium)
-                                                generator.impactOccurred()
+                                            } else {
+                                                pauseTimer()
                                             }
-                                    )
+                                        }
+                                        .onEnded { _ in
+                                            resumeTimer()
+                                            
+                                            UIPasteboard.general.string = word
+                                            let generator = UIImpactFeedbackGenerator(style: .medium)
+                                            generator.impactOccurred()
+                                        }
+                                )
                             }
                         }
                         .offset(x: swipeOffset, y: swipeUpOffset)
@@ -180,10 +204,36 @@ struct ContentView: View {
         }
     }
     
+    // ✅ Helpers for wrapping decision / break behavior
+    
+    private func needsWrapping(text: String, baseFontSize: CGFloat, availableWidth: CGFloat, minScale: CGFloat) -> Bool {
+        // if it fits on one line at full size, no need to wrap
+        let font = UIFont.boldSystemFont(ofSize: baseFontSize)
+        let singleLineWidth = (text as NSString).size(withAttributes: [.font: font]).width
+        
+        // a little padding so we don't hit the edge
+        let usableWidth = max(availableWidth - 24, 1)
+        
+        if singleLineWidth <= usableWidth {
+            return false
+        }
+        
+        let requiredScale = usableWidth / singleLineWidth
+        return requiredScale < minScale
+    }
+    
+    private func makeBreakableText(_ text: String) -> String {
+        // Prefer breaking at spaces automatically.
+        // If there are no spaces, inject zero-width spaces to allow wrapping between characters.
+        if text.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            return text
+        }
+        return text.map { String($0) }.joined(separator: "\u{200B}")
+    }
+    
     // MARK: - Swipe Handling
     
     private func handleLeftSwipe() {
-        
         pauseTimer()
         guard !selectedWords.isEmpty else { return }
         
@@ -198,10 +248,8 @@ struct ContentView: View {
         }
     }
     
-    // ✅ NEW: Swipe right -> show previous word(s)
     private func handleRightSwipe() {
         pauseTimer()
-        
         guard !wordHistory.isEmpty, historyIndex > 0 else { return }
         
         withAnimation {
@@ -225,7 +273,6 @@ struct ContentView: View {
         }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            
             for csv in selectedCSVs {
                 if let words = allWordsPerCSV[csv],
                    words.contains(word) {
@@ -240,7 +287,7 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Remaining Logic (UNCHANGED)
+    // MARK: - Remaining Logic
     
     private func addToOwnVocab(_ wordsToAdd: [String]) {
         let fileURL = getOwnVocabURL()
@@ -325,7 +372,6 @@ struct ContentView: View {
         return combined
     }
     
-    // ✅ UPDATED: can record into history, and trims "future" history if you go back then generate new
     private func selectRandomWords(recordHistory: Bool = true) {
         updateTimer()
         
@@ -341,12 +387,10 @@ struct ContentView: View {
         
         guard recordHistory, !newSelection.isEmpty else { return }
         
-        // If user went back in history and then generates a new word, drop the "forward" history
         if historyIndex >= 0, historyIndex < wordHistory.count - 1 {
             wordHistory = Array(wordHistory.prefix(historyIndex + 1))
         }
         
-        // Avoid duplicate consecutive entries
         if wordHistory.last != newSelection {
             wordHistory.append(newSelection)
             historyIndex = wordHistory.count - 1
@@ -386,7 +430,6 @@ struct ContentView: View {
         allWordsPerCSV.removeAll()
         
         for csv in selectedCSVs {
-            
             let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("\(csv).csv")
             
@@ -408,7 +451,6 @@ struct ContentView: View {
             }
         }
         
-        // ✅ start history fresh when loading
         wordHistory.removeAll()
         historyIndex = -1
         
@@ -452,10 +494,6 @@ struct ContentView: View {
     }
     
     private var getTextColor: Color {
-        if timer == nil {
-            return Color.gray
-        } else {
-            return Color.primary
-        }
+        timer == nil ? Color.gray : Color.primary
     }
 }
