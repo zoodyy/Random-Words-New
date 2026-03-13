@@ -8,8 +8,25 @@ struct SettingsView: View {
     @Binding var selectedThemeRaw: String
     @Binding var minimumWordLength: Int
     @Binding var minLengthExcludedCSVs: Set<String>
+    @Binding var selectedWordFontRaw: String
     
     let availableCSVs: [String]
+    
+    private let availableFonts: [String] = [
+        "Default",
+        "Slackey",
+        "Avenir Next",
+        "Georgia",
+        "Helvetica Neue",
+        "Futura",
+        "Chalkboard",
+        "Marker Felt",
+        "Palatino",
+        "Gill Sans",
+        "Baskerville",
+        "American Typewriter",
+        "Copperplate"
+    ]
     
     var body: some View {
         VStack(spacing: 15) {
@@ -87,6 +104,19 @@ struct SettingsView: View {
             
             Toggle("Fair List Distribution", isOn: $fairWordDistribution)
                 .padding(.horizontal)
+            
+            Divider()
+            
+            Text("Word Font")
+                .font(.headline)
+            
+            Picker("Word Font", selection: $selectedWordFontRaw) {
+                ForEach(availableFonts, id: \.self) { fontName in
+                    Text(fontName).tag(fontName)
+                }
+            }
+            .pickerStyle(.menu)
+            .padding(.horizontal)
             
             Divider()
             

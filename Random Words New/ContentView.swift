@@ -24,6 +24,7 @@ struct ContentView: View {
     @AppStorage("fairWordDistribution") private var fairWordDistribution: Bool = false
     @AppStorage("selectedTheme") private var selectedThemeRaw: String = AppTheme.system.rawValue
     @AppStorage("minimumWordLength") private var minimumWordLength: Int = 1
+    @AppStorage("selectedWordFont") private var selectedWordFontRaw: String = "Default"
     
     @AppStorage("selectedCSVsData") private var selectedCSVsData: Data = Data()
     @AppStorage("csvRangesData") private var csvRangesData: Data = Data()
@@ -107,6 +108,37 @@ struct ContentView: View {
         return names.sorted()
     }
     
+    private func wordFont(size: CGFloat) -> Font {
+        switch selectedWordFontRaw {
+        case "Slackey":
+            return .custom("Slackey", size: size)
+        case "Avenir Next":
+            return .custom("AvenirNext-Regular", size: size)
+        case "Georgia":
+            return .custom("Georgia", size: size)
+        case "Helvetica Neue":
+            return .custom("HelveticaNeue", size: size)
+        case "Futura":
+            return .custom("Futura-Medium", size: size)
+        case "Chalkboard":
+            return .custom("ChalkboardSE-Regular", size: size)
+        case "Marker Felt":
+            return .custom("MarkerFelt-Wide", size: size)
+        case "Palatino":
+            return .custom("Palatino-Roman", size: size)
+        case "Gill Sans":
+            return .custom("GillSans", size: size)
+        case "Baskerville":
+            return .custom("Baskerville", size: size)
+        case "American Typewriter":
+            return .custom("AmericanTypewriter", size: size)
+        case "Copperplate":
+            return .custom("Copperplate", size: size)
+        default:
+            return .system(size: size)
+        }
+    }
+    
     var body: some View {
         NavigationStack {
             mainContent()
@@ -156,9 +188,6 @@ struct ContentView: View {
                                 let baseFontSize = min(geo.size.width, maxFontSize)
                                 let minScale: CGFloat = 0.2
                                 
-                                // ✅ FIX AREA:
-                                // Still shrink down, but if shrinking would go below minScale,
-                                // stop shrinking and wrap (prefer spaces; otherwise allow char wrapping).
                                 let shouldWrap = needsWrapping(
                                     text: word,
                                     baseFontSize: baseFontSize,
@@ -169,15 +198,15 @@ struct ContentView: View {
                                 Group {
                                     if shouldWrap {
                                         Text(makeBreakableText(word))
-                                            .font(.system(size: baseFontSize * minScale))
+                                            .font(wordFont(size: baseFontSize * minScale))
                                             .bold()
                                             .foregroundColor(getTextColor)
                                             .multilineTextAlignment(.center)
                                             .lineLimit(nil)
-                                            .minimumScaleFactor(1.0) // no further shrinking; wrapping instead
+                                            .minimumScaleFactor(1.0)
                                     } else {
                                         Text(word)
-                                            .font(.system(size: baseFontSize))
+                                            .font(wordFont(size: baseFontSize))
                                             .bold()
                                             .foregroundColor(getTextColor)
                                             .minimumScaleFactor(minScale)
@@ -236,11 +265,9 @@ struct ContentView: View {
     // ✅ Helpers for wrapping decision / break behavior
     
     private func needsWrapping(text: String, baseFontSize: CGFloat, availableWidth: CGFloat, minScale: CGFloat) -> Bool {
-        // if it fits on one line at full size, no need to wrap
         let font = UIFont.boldSystemFont(ofSize: baseFontSize)
         let singleLineWidth = (text as NSString).size(withAttributes: [.font: font]).width
         
-        // a little padding so we don't hit the edge
         let usableWidth = max(availableWidth - 24, 1)
         
         if singleLineWidth <= usableWidth {
@@ -252,8 +279,6 @@ struct ContentView: View {
     }
     
     private func makeBreakableText(_ text: String) -> String {
-        // Prefer breaking at spaces automatically.
-        // If there are no spaces, inject zero-width spaces to allow wrapping between characters.
         if text.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
             return text
         }
@@ -361,6 +386,7 @@ struct ContentView: View {
                     selectedThemeRaw: $selectedThemeRaw,
                     minimumWordLength: $minimumWordLength,
                     minLengthExcludedCSVs: $minLengthExcludedCSVs,
+                    selectedWordFontRaw: $selectedWordFontRaw,
                     availableCSVs: availableCSVNames
                 )
             ) {
@@ -436,7 +462,6 @@ struct ContentView: View {
         if wordHistory.last != newSelection {
             wordHistory.append(newSelection)
             
-            // ✅ Keep only the last 100 history entries
             if wordHistory.count > maxHistoryCount {
                 let overflow = wordHistory.count - maxHistoryCount
                 wordHistory.removeFirst(overflow)
