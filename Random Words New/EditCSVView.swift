@@ -143,6 +143,7 @@ struct EditCSVView: View {
             .onDisappear {
                 let url = getDocumentsURL()
                 if FileManager.default.fileExists(atPath: url.path) {
+                    removeNewestDuplicates()
                     saveCSV()
                 }
             }
@@ -229,21 +230,30 @@ struct EditCSVView: View {
         let originalIndex = displayedIndices[displayedIndex]
         guard originalOrder.indices.contains(originalIndex) else { return }
 
-        let proposedWord = words[displayedIndex]
-        let trimmedProposedWord = proposedWord.trimmingCharacters(in: .whitespaces)
+        originalOrder[originalIndex] = words[displayedIndex]
+    }
 
-        let duplicateExists = originalOrder.enumerated().contains { index, word in
-            index != originalIndex &&
-            word.trimmingCharacters(in: .whitespaces) == trimmedProposedWord &&
-            !trimmedProposedWord.isEmpty
+    private func removeNewestDuplicates() {
+        var seen = Set<String>()
+        var deduplicatedReversed: [String] = []
+
+        for word in originalOrder.reversed() {
+            let trimmed = word.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                deduplicatedReversed.append(word)
+                continue
+            }
+
+            if seen.contains(trimmed) {
+                continue
+            }
+
+            seen.insert(trimmed)
+            deduplicatedReversed.append(word)
         }
 
-        if duplicateExists {
-            words[displayedIndex] = originalOrder[originalIndex]
-            return
-        }
-
-        originalOrder[originalIndex] = proposedWord
+        originalOrder = deduplicatedReversed.reversed()
+        applyCurrentSort()
     }
 
     private func getDocumentsURL() -> URL {
