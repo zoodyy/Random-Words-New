@@ -228,7 +228,22 @@ struct EditCSVView: View {
         guard displayedIndices.indices.contains(displayedIndex) else { return }
         let originalIndex = displayedIndices[displayedIndex]
         guard originalOrder.indices.contains(originalIndex) else { return }
-        originalOrder[originalIndex] = words[displayedIndex]
+
+        let proposedWord = words[displayedIndex]
+        let trimmedProposedWord = proposedWord.trimmingCharacters(in: .whitespaces)
+
+        let duplicateExists = originalOrder.enumerated().contains { index, word in
+            index != originalIndex &&
+            word.trimmingCharacters(in: .whitespaces) == trimmedProposedWord &&
+            !trimmedProposedWord.isEmpty
+        }
+
+        if duplicateExists {
+            words[displayedIndex] = originalOrder[originalIndex]
+            return
+        }
+
+        originalOrder[originalIndex] = proposedWord
     }
 
     private func getDocumentsURL() -> URL {
@@ -239,6 +254,14 @@ struct EditCSVView: View {
     private func addWord() {
         let trimmed = newWord.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+
+        let alreadyExists = originalOrder.contains {
+            $0.trimmingCharacters(in: .whitespaces) == trimmed
+        }
+        guard !alreadyExists else {
+            newWord = ""
+            return
+        }
 
         originalOrder.append(trimmed)
         newWord = ""
