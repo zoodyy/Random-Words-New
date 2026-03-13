@@ -6,6 +6,10 @@ struct SettingsView: View {
     @Binding var numberOfWordsToShow: Int
     @Binding var fairWordDistribution: Bool
     @Binding var selectedThemeRaw: String
+    @Binding var minimumWordLength: Int
+    @Binding var minLengthExcludedCSVs: Set<String>
+    
+    let availableCSVs: [String]
     
     var body: some View {
         VStack(spacing: 15) {
@@ -32,6 +36,52 @@ struct SettingsView: View {
                 step: 1
             )
             .padding()
+            
+            Divider()
+            
+            Text("Minimum Word Length: \(minimumWordLength)")
+                .font(.headline)
+            
+            Slider(
+                value: Binding(
+                    get: { Double(minimumWordLength) },
+                    set: { minimumWordLength = Int($0) }
+                ),
+                in: 1...30,
+                step: 1
+            )
+            .padding()
+            
+            if !availableCSVs.isEmpty {
+                Divider()
+                
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Ignore Minimum Length For")
+                        .font(.headline)
+                    
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(availableCSVs, id: \.self) { csv in
+                                Toggle(
+                                    csv,
+                                    isOn: Binding(
+                                        get: { minLengthExcludedCSVs.contains(csv) },
+                                        set: { isOn in
+                                            if isOn {
+                                                minLengthExcludedCSVs.insert(csv)
+                                            } else {
+                                                minLengthExcludedCSVs.remove(csv)
+                                            }
+                                        }
+                                    )
+                                )
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                    .frame(maxHeight: 180)
+                }
+            }
             
             Divider()
             

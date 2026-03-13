@@ -10,8 +10,8 @@ struct DictView: View {
     
     @State private var csvFiles: [String] = [
         "ownVocab",
-        "333kWordsEnglishByFreq",
-        "45kWordsEnglishByFreq",
+        "333kEnglishByFreq",
+        "45kEnglishByFreq",
         "10kTVMovieByFreq",
         "2kFictionByFreq",
         "2kPoetryByFreq"

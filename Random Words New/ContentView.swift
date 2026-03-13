@@ -23,9 +23,11 @@ struct ContentView: View {
     @AppStorage("numberOfWordsToShow") private var numberOfWordsToShow: Int = 1
     @AppStorage("fairWordDistribution") private var fairWordDistribution: Bool = false
     @AppStorage("selectedTheme") private var selectedThemeRaw: String = AppTheme.system.rawValue
+    @AppStorage("minimumWordLength") private var minimumWordLength: Int = 1
     
     @AppStorage("selectedCSVsData") private var selectedCSVsData: Data = Data()
     @AppStorage("csvRangesData") private var csvRangesData: Data = Data()
+    @AppStorage("minLengthExcludedCSVsData") private var minLengthExcludedCSVsData: Data = Data()
     
     // MARK: - Runtime State
     
@@ -35,6 +37,7 @@ struct ContentView: View {
     @State private var timer: Timer?
     @State private var sliderChangeTrigger = 0
     @State private var allWordsPerCSV: [String: [String]] = [:]
+    @State private var minLengthExcludedCSVs: Set<String> = []
     
     @State private var swipeOffset: CGFloat = 0
     @State private var swipeUpOffset: CGFloat = 0
@@ -83,6 +86,27 @@ struct ContentView: View {
         }
     }
     
+    private var availableCSVNames: [String] {
+        var names = Set<String>()
+        
+        let fileManager = FileManager.default
+        
+        if let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first,
+           let documentFiles = try? fileManager.contentsOfDirectory(at: documentsURL, includingPropertiesForKeys: nil) {
+            for file in documentFiles where file.pathExtension.lowercased() == "csv" {
+                names.insert(file.deletingPathExtension().lastPathComponent)
+            }
+        }
+        
+        if let bundleFiles = Bundle.main.urls(forResourcesWithExtension: "csv", subdirectory: nil) {
+            for file in bundleFiles {
+                names.insert(file.deletingPathExtension().lastPathComponent)
+            }
+        }
+        
+        return names.sorted()
+    }
+    
     var body: some View {
         NavigationStack {
             mainContent()
@@ -101,9 +125,11 @@ struct ContentView: View {
                 }
                 .onChange(of: selectedCSVs) { _ in saveCSVs() }
                 .onChange(of: csvRanges) { _ in saveRanges() }
+                .onChange(of: minLengthExcludedCSVs) { _ in saveMinLengthExcludedCSVs() }
                 .onChange(of: switchInterval) { _ in updateTimer() }
                 .onChange(of: numberOfWordsToShow) { _ in selectRandomWords(recordHistory: true) }
                 .onChange(of: fairWordDistribution) { _ in selectRandomWords(recordHistory: true) }
+                .onChange(of: minimumWordLength) { _ in selectRandomWords(recordHistory: true) }
         }
         .preferredColorScheme(colorScheme)
     }
@@ -234,6 +260,10 @@ struct ContentView: View {
         return text.map { String($0) }.joined(separator: "\u{200B}")
     }
     
+    private func letterCount(of word: String) -> Int {
+        word.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
+    }
+    
     // MARK: - Swipe Handling
     
     private func handleLeftSwipe() {
@@ -328,7 +358,10 @@ struct ContentView: View {
                     switchInterval: $switchInterval,
                     numberOfWordsToShow: $numberOfWordsToShow,
                     fairWordDistribution: $fairWordDistribution,
-                    selectedThemeRaw: $selectedThemeRaw
+                    selectedThemeRaw: $selectedThemeRaw,
+                    minimumWordLength: $minimumWordLength,
+                    minLengthExcludedCSVs: $minLengthExcludedCSVs,
+                    availableCSVs: availableCSVNames
                 )
             ) {
                 Image(systemName: "line.3.horizontal")
@@ -368,7 +401,13 @@ struct ContentView: View {
             let upper = Int(Double(total) * range.upper)
             
             if lower < upper {
-                combined.append(contentsOf: words[lower..<upper])
+                let rangedWords = Array(words[lower..<upper])
+                
+                if minLengthExcludedCSVs.contains(csv) {
+                    combined.append(contentsOf: rangedWords)
+                } else {
+                    combined.append(contentsOf: rangedWords.filter { letterCount(of: $0) >= minimumWordLength })
+                }
             }
         }
         
@@ -413,7 +452,18 @@ struct ContentView: View {
             guard let range = csvRanges[$0],
                   let words = allWordsPerCSV[$0]
             else { return false }
-            return !words.isEmpty && range.lower < range.upper
+            
+            let total = words.count
+            let lower = Int(Double(total) * range.lower)
+            let upper = Int(Double(total) * range.upper)
+            guard lower < upper else { return false }
+            
+            let rangedWords = Array(words[lower..<upper])
+            if minLengthExcludedCSVs.contains($0) {
+                return !rangedWords.isEmpty
+            } else {
+                return rangedWords.contains { letterCount(of: $0) >= minimumWordLength }
+            }
         }
         
         for _ in 0..<numberOfWordsToShow {
@@ -426,9 +476,19 @@ struct ContentView: View {
             let lower = Int(Double(total) * range.lower)
             let upper = Int(Double(total) * range.upper)
             
-            if lower < upper,
-               let word = words[lower..<upper].randomElement() {
-                results.append(word)
+            if lower < upper {
+                let rangedWords = Array(words[lower..<upper])
+                let eligibleWords: [String]
+                
+                if minLengthExcludedCSVs.contains(randomCSV) {
+                    eligibleWords = rangedWords
+                } else {
+                    eligibleWords = rangedWords.filter { letterCount(of: $0) >= minimumWordLength }
+                }
+                
+                if let word = eligibleWords.randomElement() {
+                    results.append(word)
+                }
             }
         }
         return results
@@ -483,9 +543,14 @@ struct ContentView: View {
         csvRangesData = (try? JSONEncoder().encode(csvRanges)) ?? Data()
     }
     
+    private func saveMinLengthExcludedCSVs() {
+        minLengthExcludedCSVsData = (try? JSONEncoder().encode(minLengthExcludedCSVs)) ?? Data()
+    }
+    
     private func loadPersistedData() {
         selectedCSVs = (try? JSONDecoder().decode(Set<String>.self, from: selectedCSVsData)) ?? []
         csvRanges = (try? JSONDecoder().decode([String: RangePair].self, from: csvRangesData)) ?? [:]
+        minLengthExcludedCSVs = (try? JSONDecoder().decode(Set<String>.self, from: minLengthExcludedCSVsData)) ?? []
     }
     
     private func pauseTimer() {
