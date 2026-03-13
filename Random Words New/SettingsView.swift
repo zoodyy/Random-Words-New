@@ -29,54 +29,55 @@ struct SettingsView: View {
     ]
     
     var body: some View {
-        VStack(spacing: 15) {
-            
-            Text(switchInterval == 0
-                 ? "Manual Mode"
-                 : "Switch every \(Int(switchInterval)) sec")
-                .font(.headline)
-            
-            Slider(value: $switchInterval, in: 0...60, step: 1)
-                .padding()
-            
-            Divider()
-            
-            Text("Words Displayed: \(numberOfWordsToShow)")
-                .font(.headline)
-            
-            Slider(
-                value: Binding(
-                    get: { Double(numberOfWordsToShow) },
-                    set: { numberOfWordsToShow = Int($0) }
-                ),
-                in: 1...20,
-                step: 1
-            )
-            .padding()
-            
-            Divider()
-            
-            Text("Minimum Word Length: \(minimumWordLength)")
-                .font(.headline)
-            
-            Slider(
-                value: Binding(
-                    get: { Double(minimumWordLength) },
-                    set: { minimumWordLength = Int($0) }
-                ),
-                in: 1...30,
-                step: 1
-            )
-            .padding()
-            
-            if !availableCSVs.isEmpty {
+        ScrollView {
+            VStack(spacing: 15) {
+                
+                Text(switchInterval == 0
+                     ? "Manual Mode"
+                     : "Switch every \(Int(switchInterval)) sec")
+                    .font(.headline)
+                
+                Slider(value: $switchInterval, in: 0...60, step: 1)
+                    .padding()
+                
                 Divider()
                 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Ignore Minimum Length For")
-                        .font(.headline)
+                Text("Words Displayed: \(numberOfWordsToShow)")
+                    .font(.headline)
+                
+                Slider(
+                    value: Binding(
+                        get: { Double(numberOfWordsToShow) },
+                        set: { numberOfWordsToShow = Int($0) }
+                    ),
+                    in: 1...20,
+                    step: 1
+                )
+                .padding()
+                
+                Divider()
+                
+                Text("Minimum Word Length: \(minimumWordLength)")
+                    .font(.headline)
+                
+                Slider(
+                    value: Binding(
+                        get: { Double(minimumWordLength) },
+                        set: { minimumWordLength = Int($0) }
+                    ),
+                    in: 1...30,
+                    step: 1
+                )
+                .padding()
+                
+                if !availableCSVs.isEmpty {
+                    Divider()
                     
-                    ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Ignore Minimum Length For")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(availableCSVs, id: \.self) { csv in
                                 Toggle(
@@ -96,44 +97,41 @@ struct SettingsView: View {
                         }
                         .padding(.horizontal)
                     }
-                    .frame(maxHeight: 180)
                 }
-            }
-            
-            Divider()
-            
-            Toggle("Fair List Distribution", isOn: $fairWordDistribution)
+                
+                Divider()
+                
+                Toggle("Fair List Distribution", isOn: $fairWordDistribution)
+                    .padding(.horizontal)
+                
+                Divider()
+                
+                Text("Word Font")
+                    .font(.headline)
+                
+                Picker("Word Font", selection: $selectedWordFontRaw) {
+                    ForEach(availableFonts, id: \.self) { fontName in
+                        Text(fontName).tag(fontName)
+                    }
+                }
+                .pickerStyle(.menu)
                 .padding(.horizontal)
-            
-            Divider()
-            
-            Text("Word Font")
-                .font(.headline)
-            
-            Picker("Word Font", selection: $selectedWordFontRaw) {
-                ForEach(availableFonts, id: \.self) { fontName in
-                    Text(fontName).tag(fontName)
+                
+                Divider()
+                
+                Text("Appearance")
+                    .font(.headline)
+                
+                Picker("Theme", selection: $selectedThemeRaw) {
+                    Text("System").tag("System")
+                    Text("Light").tag("Light")
+                    Text("Dark").tag("Dark")
                 }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
             }
-            .pickerStyle(.menu)
-            .padding(.horizontal)
-            
-            Divider()
-            
-            Text("Appearance")
-                .font(.headline)
-            
-            Picker("Theme", selection: $selectedThemeRaw) {
-                Text("System").tag("System")
-                Text("Light").tag("Light")
-                Text("Dark").tag("Dark")
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            
-            Spacer()
+            .padding()
         }
-        .padding()
         .navigationTitle("Settings")
     }
 }
