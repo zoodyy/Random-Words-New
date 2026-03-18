@@ -79,23 +79,25 @@ struct DictView: View {
                             .font(.subheadline)
                             .foregroundColor(.gray)
                         
-                        Slider(value: Binding(
-                            get: { csvRanges[file]?.0 ?? 0.0 },
-                            set: { newValue in
-                                let upper = csvRanges[file]?.1 ?? 1.0
-                                csvRanges[file] = (min(newValue, upper), upper)
-                                sliderChangeTrigger += 1
-                            }
-                        ), in: 0...1)
-                        
-                        Slider(value: Binding(
-                            get: { csvRanges[file]?.1 ?? 1.0 },
-                            set: { newValue in
-                                let lower = csvRanges[file]?.0 ?? 0.0
-                                csvRanges[file] = (lower, max(newValue, lower))
-                                sliderChangeTrigger += 1
-                            }
-                        ), in: 0...1)
+                        RangeSlider(
+                            lowerValue: Binding(
+                                get: { csvRanges[file]?.0 ?? 0.0 },
+                                set: { newValue in
+                                    let upper = csvRanges[file]?.1 ?? 1.0
+                                    csvRanges[file] = (min(newValue, upper), upper)
+                                    sliderChangeTrigger += 1
+                                }
+                            ),
+                            upperValue: Binding(
+                                get: { csvRanges[file]?.1 ?? 1.0 },
+                                set: { newValue in
+                                    let lower = csvRanges[file]?.0 ?? 0.0
+                                    csvRanges[file] = (lower, max(newValue, lower))
+                                    sliderChangeTrigger += 1
+                                }
+                            )
+                        )
+                        .frame(height: 32)
                     }
                 }
                 .swipeActions(edge: .trailing) {
@@ -283,5 +285,74 @@ struct DictView: View {
             }
         }
         sliderChangeTrigger += 1
+    }
+}
+
+private struct RangeSlider: View {
+    
+    @Binding var lowerValue: Double
+    @Binding var upperValue: Double
+    
+    private let thumbSize: CGFloat = 20
+    private let trackHeight: CGFloat = 4
+    
+    var body: some View {
+        GeometryReader { geometry in
+            let availableWidth = max(geometry.size.width - thumbSize, 1)
+            let trackY = (geometry.size.height - trackHeight) / 2
+            let thumbY = (geometry.size.height - thumbSize) / 2
+            
+            let lowerThumbX = CGFloat(lowerValue) * availableWidth
+            let upperThumbX = CGFloat(upperValue) * availableWidth
+            
+            let lowerCenterX = lowerThumbX + thumbSize / 2
+            let upperCenterX = upperThumbX + thumbSize / 2
+            
+            ZStack(alignment: .topLeading) {
+                Capsule()
+                    .fill(Color(.systemGray4))
+                    .frame(width: availableWidth, height: trackHeight)
+                    .offset(x: thumbSize / 2, y: trackY)
+                
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: max(upperCenterX - lowerCenterX, 0), height: trackHeight)
+                    .offset(x: lowerCenterX, y: trackY)
+                
+                Circle()
+                    .fill(Color.white)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.accentColor, lineWidth: 2)
+                    )
+                    .frame(width: thumbSize, height: thumbSize)
+                    .offset(x: lowerThumbX, y: thumbY)
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                let newX = min(max(0, value.location.x - thumbSize / 2), upperThumbX)
+                                let newValue = Double(newX / availableWidth)
+                                lowerValue = newValue
+                            }
+                    )
+                
+                Circle()
+                    .fill(Color.white)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.accentColor, lineWidth: 2)
+                    )
+                    .frame(width: thumbSize, height: thumbSize)
+                    .offset(x: upperThumbX, y: thumbY)
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                let newX = max(min(availableWidth, value.location.x - thumbSize / 2), lowerThumbX)
+                                let newValue = Double(newX / availableWidth)
+                                upperValue = newValue
+                            }
+                    )
+            }
+        }
     }
 }
