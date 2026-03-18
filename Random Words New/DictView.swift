@@ -14,7 +14,11 @@ struct DictView: View {
         "45kEnglishByFreq",
         "10kTVMovieByFreq",
         "2kFictionByFreq",
-        "2kPoetryByFreq"
+        "2kPoetryByFreq",
+        "10kGoogle1TByFreq",
+        "30kGoogle1TByFreq",
+        "30kEnglishByFreq",
+        "ownPhrases"
     ]
     
     @State private var csvToEdit: String?
