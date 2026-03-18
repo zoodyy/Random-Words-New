@@ -9,16 +9,16 @@ struct DictView: View {
     @Binding var sliderChangeTrigger: Int
     
     @State private var csvFiles: [String] = [
-        "ownVocab",
-        "333kEnglishByFreq",
-        "45kEnglishByFreq",
-        "10kTVMovieByFreq",
-        "2kFictionByFreq",
-        "2kPoetryByFreq",
-        "10kGoogle1TByFreq",
-        "30kGoogle1TByFreq",
-        "30kEnglishByFreq",
-        "ownPhrases"
+        "ownVocab", // my own word list
+        "ownPhrases",   // own list of phrases
+        "333kEnglishByFreq",    // https://www.kaggle.com/datasets/rtatman/english-word-frequency
+        "45kEnglishByFreq", // first 45k from '333kEnglishByFreq'
+        "10kTVMovieByFreq", // https://en.wiktionary.org/wiki/Wiktionary:Frequency_lists/English/TV_and_Movie_Scripts_(2006)
+        "2kFictionByFreq",  //https://en.wiktionary.org/wiki/Wiktionary:Frequency_lists/Contemporary_fiction
+        "2kPoetryByFreq",   //https://en.wiktionary.org/wiki/Wiktionary:Frequency_lists/Contemporary_poetry
+        "10kGoogle1TByFreq",    // https://github.com/first20hours/google-10000-english 'google-10000-english-usa.txt'
+        "20kGoogle1TByFreq",    // https://github.com/first20hours/google-10000-english '20k.txt'
+        "30kEnglishByFreq" // https://github.com/arstgit/high-frequency-vocabulary '30k.txt'
     ]
     
     @State private var csvToEdit: String?
