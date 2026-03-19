@@ -174,7 +174,7 @@ struct DictView: View {
         .fileImporter(
             isPresented: $showingImportPicker,
             allowedContentTypes: [.commaSeparatedText, .folder, .plainText],
-            allowsMultipleSelection: false
+            allowsMultipleSelection: true
         ) { result in
             handleImport(result: result)
         }
@@ -332,30 +332,33 @@ struct DictView: View {
     
     private func handleImport(result: Result<[URL], Error>) {
         do {
-            guard let selectedURL = try result.get().first else { return }
+            let selectedURLs = try result.get()
+            guard !selectedURLs.isEmpty else { return }
             
-            let accessing = selectedURL.startAccessingSecurityScopedResource()
-            defer {
-                if accessing {
-                    selectedURL.stopAccessingSecurityScopedResource()
+            for selectedURL in selectedURLs {
+                let accessing = selectedURL.startAccessingSecurityScopedResource()
+                defer {
+                    if accessing {
+                        selectedURL.stopAccessingSecurityScopedResource()
+                    }
                 }
-            }
-            
-            let resourceValues = try? selectedURL.resourceValues(forKeys: [.isDirectoryKey])
-            let isDirectory = resourceValues?.isDirectory ?? false
-            
-            if isDirectory {
-                try importFolder(from: selectedURL)
-            } else {
-                let ext = selectedURL.pathExtension.lowercased()
                 
-                switch ext {
-                case "csv":
-                    try importSingleCSV(from: selectedURL)
-                case "txt":
-                    try importTXT(from: selectedURL)
-                default:
-                    break
+                let resourceValues = try? selectedURL.resourceValues(forKeys: [.isDirectoryKey])
+                let isDirectory = resourceValues?.isDirectory ?? false
+                
+                if isDirectory {
+                    try importFolder(from: selectedURL)
+                } else {
+                    let ext = selectedURL.pathExtension.lowercased()
+                    
+                    switch ext {
+                    case "csv":
+                        try importSingleCSV(from: selectedURL)
+                    case "txt":
+                        try importTXT(from: selectedURL)
+                    default:
+                        break
+                    }
                 }
             }
             
