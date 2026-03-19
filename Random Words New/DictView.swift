@@ -291,8 +291,8 @@ struct DictView: View {
         }
         
         if exportRanges {
-            let cfgURL = exportFolderURL.appendingPathComponent("ranges.cfg")
-            let cfgContent = selectedFilesInOrder.map { file in
+            let txtURL = exportFolderURL.appendingPathComponent("ranges.txt")
+            let txtContent = selectedFilesInOrder.map { file in
                 let range = csvRanges[file] ?? (0.0, 1.0)
                 let lowerPercent = Int(range.0 * 100)
                 let upperPercent = Int(range.1 * 100)
@@ -300,7 +300,7 @@ struct DictView: View {
             }
             .joined(separator: "\n")
             
-            try cfgContent.write(to: cfgURL, atomically: true, encoding: .utf8)
+            try txtContent.write(to: txtURL, atomically: true, encoding: .utf8)
         }
         
         return exportFolderURL
@@ -352,8 +352,8 @@ struct DictView: View {
                 switch ext {
                 case "csv":
                     try importSingleCSV(from: selectedURL)
-                case "cfg":
-                    try importCFG(from: selectedURL)
+                case "txt":
+                    try importTXT(from: selectedURL)
                 default:
                     break
                 }
@@ -404,7 +404,7 @@ struct DictView: View {
         )
         
         var importedCSVNames: [String] = []
-        var cfgURL: URL?
+        var txtURL: URL?
         
         for fileURL in contents {
             let values = try? fileURL.resourceValues(forKeys: [.isDirectoryKey])
@@ -417,13 +417,13 @@ struct DictView: View {
             if ext == "csv" {
                 let importedName = try copyCSVToDocuments(from: fileURL)
                 importedCSVNames.append(importedName)
-            } else if ext == "cfg" && cfgURL == nil {
-                cfgURL = fileURL
+            } else if ext == "txt" && txtURL == nil {
+                txtURL = fileURL
             }
         }
         
-        if let cfgURL {
-            try applyCFG(from: cfgURL)
+        if let txtURL {
+            try applyTXT(from: txtURL)
         } else {
             for name in importedCSVNames {
                 selectedCSVs.insert(name)
@@ -434,8 +434,8 @@ struct DictView: View {
         }
     }
     
-    private func importCFG(from cfgURL: URL) throws {
-        try applyCFG(from: cfgURL)
+    private func importTXT(from txtURL: URL) throws {
+        try applyTXT(from: txtURL)
     }
     
     @discardableResult
@@ -465,9 +465,9 @@ struct DictView: View {
         return cleanedName
     }
     
-    private func applyCFG(from cfgURL: URL) throws {
-        let content = try String(contentsOf: cfgURL, encoding: .utf8)
-        let parsedRanges = parseCFG(content)
+    private func applyTXT(from txtURL: URL) throws {
+        let content = try String(contentsOf: txtURL, encoding: .utf8)
+        let parsedRanges = parseTXT(content)
         
         selectedCSVs.removeAll()
         
@@ -489,7 +489,7 @@ struct DictView: View {
         }
     }
     
-    private func parseCFG(_ content: String) -> [String: (Double, Double)] {
+    private func parseTXT(_ content: String) -> [String: (Double, Double)] {
         var result: [String: (Double, Double)] = [:]
         
         let lines = content.components(separatedBy: .newlines)
