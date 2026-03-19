@@ -173,7 +173,7 @@ struct DictView: View {
         }
         .fileImporter(
             isPresented: $showingImportPicker,
-            allowedContentTypes: [UTType.commaSeparatedText],
+            allowedContentTypes: [.commaSeparatedText, .folder, .plainText],
             allowsMultipleSelection: false
         ) { result in
             handleImport(result: result)
@@ -328,48 +328,203 @@ struct DictView: View {
         sliderChangeTrigger += 1
     }
     
-    // MARK: - Import CSV
+    // MARK: - Import
     
     private func handleImport(result: Result<[URL], Error>) {
         do {
-            guard let selectedFile = try result.get().first else { return }
+            guard let selectedURL = try result.get().first else { return }
             
-            let accessing = selectedFile.startAccessingSecurityScopedResource()
+            let accessing = selectedURL.startAccessingSecurityScopedResource()
             defer {
                 if accessing {
-                    selectedFile.stopAccessingSecurityScopedResource()
+                    selectedURL.stopAccessingSecurityScopedResource()
                 }
             }
             
-            let fileName = selectedFile
-                .deletingPathExtension()
-                .lastPathComponent
+            let resourceValues = try? selectedURL.resourceValues(forKeys: [.isDirectoryKey])
+            let isDirectory = resourceValues?.isDirectory ?? false
             
-            let cleanedName = fileName
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: ".csv", with: "")
-            
-            guard !cleanedName.isEmpty else { return }
-            
-            let destinationURL = getDocumentsURL(for: cleanedName)
-            
-            if FileManager.default.fileExists(atPath: destinationURL.path) {
-                try FileManager.default.removeItem(at: destinationURL)
+            if isDirectory {
+                try importFolder(from: selectedURL)
+            } else {
+                let ext = selectedURL.pathExtension.lowercased()
+                
+                switch ext {
+                case "csv":
+                    try importSingleCSV(from: selectedURL)
+                case "cfg":
+                    try importCFG(from: selectedURL)
+                default:
+                    break
+                }
             }
             
-            try FileManager.default.copyItem(at: selectedFile, to: destinationURL)
-            
-            if !csvFiles.contains(cleanedName) {
-                csvFiles.insert(cleanedName, at: 0)
-            }
-            
-            selectedCSVs.insert(cleanedName)
-            csvRanges[cleanedName] = (0.0, 1.0)
             sliderChangeTrigger += 1
             
         } catch {
             print("Import failed: \(error)")
         }
+    }
+    
+    private func importSingleCSV(from selectedFile: URL) throws {
+        let fileName = selectedFile
+            .deletingPathExtension()
+            .lastPathComponent
+        
+        let cleanedName = fileName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ".csv", with: "")
+        
+        guard !cleanedName.isEmpty else { return }
+        
+        let destinationURL = getDocumentsURL(for: cleanedName)
+        
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        
+        try FileManager.default.copyItem(at: selectedFile, to: destinationURL)
+        
+        if !csvFiles.contains(cleanedName) {
+            csvFiles.insert(cleanedName, at: 0)
+        }
+        
+        selectedCSVs.insert(cleanedName)
+        if csvRanges[cleanedName] == nil {
+            csvRanges[cleanedName] = (0.0, 1.0)
+        }
+    }
+    
+    private func importFolder(from folderURL: URL) throws {
+        let fileManager = FileManager.default
+        let contents = try fileManager.contentsOfDirectory(
+            at: folderURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        
+        var importedCSVNames: [String] = []
+        var cfgURL: URL?
+        
+        for fileURL in contents {
+            let values = try? fileURL.resourceValues(forKeys: [.isDirectoryKey])
+            if values?.isDirectory == true {
+                continue
+            }
+            
+            let ext = fileURL.pathExtension.lowercased()
+            
+            if ext == "csv" {
+                let importedName = try copyCSVToDocuments(from: fileURL)
+                importedCSVNames.append(importedName)
+            } else if ext == "cfg" && cfgURL == nil {
+                cfgURL = fileURL
+            }
+        }
+        
+        if let cfgURL {
+            try applyCFG(from: cfgURL)
+        } else {
+            for name in importedCSVNames {
+                selectedCSVs.insert(name)
+                if csvRanges[name] == nil {
+                    csvRanges[name] = (0.0, 1.0)
+                }
+            }
+        }
+    }
+    
+    private func importCFG(from cfgURL: URL) throws {
+        try applyCFG(from: cfgURL)
+    }
+    
+    @discardableResult
+    private func copyCSVToDocuments(from sourceURL: URL) throws -> String {
+        let fileName = sourceURL
+            .deletingPathExtension()
+            .lastPathComponent
+        
+        let cleanedName = fileName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ".csv", with: "")
+        
+        guard !cleanedName.isEmpty else { return "" }
+        
+        let destinationURL = getDocumentsURL(for: cleanedName)
+        
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        
+        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        
+        if !csvFiles.contains(cleanedName) {
+            csvFiles.insert(cleanedName, at: 0)
+        }
+        
+        return cleanedName
+    }
+    
+    private func applyCFG(from cfgURL: URL) throws {
+        let content = try String(contentsOf: cfgURL, encoding: .utf8)
+        let parsedRanges = parseCFG(content)
+        
+        selectedCSVs.removeAll()
+        
+        for existingFile in csvFiles {
+            csvRanges[existingFile] = nil
+        }
+        
+        for (fileName, range) in parsedRanges {
+            let fileExistsLocally = FileManager.default.fileExists(atPath: getDocumentsURL(for: fileName).path)
+            
+            if fileExistsLocally {
+                if !csvFiles.contains(fileName) {
+                    csvFiles.insert(fileName, at: 0)
+                }
+                
+                selectedCSVs.insert(fileName)
+                csvRanges[fileName] = range
+            }
+        }
+    }
+    
+    private func parseCFG(_ content: String) -> [String: (Double, Double)] {
+        var result: [String: (Double, Double)] = [:]
+        
+        let lines = content.components(separatedBy: .newlines)
+        
+        for rawLine in lines {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            
+            let parts = line.components(separatedBy: "=")
+            guard parts.count == 2 else { continue }
+            
+            let fileName = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let rangePart = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            let rangeValues = rangePart.components(separatedBy: "-")
+            guard rangeValues.count == 2 else { continue }
+            
+            let lowerPercentString = rangeValues[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let upperPercentString = rangeValues[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            guard
+                let lowerPercent = Double(lowerPercentString),
+                let upperPercent = Double(upperPercentString)
+            else {
+                continue
+            }
+            
+            let lower = min(max(lowerPercent / 100.0, 0.0), 1.0)
+            let upper = min(max(upperPercent / 100.0, lower), 1.0)
+            
+            guard !fileName.isEmpty else { continue }
+            result[fileName] = (lower, upper)
+        }
+        
+        return result
     }
     
     // MARK: - Load Existing User CSVs
