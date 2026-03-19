@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import UIKit
 
 struct DictView: View {
     
@@ -33,11 +34,21 @@ struct DictView: View {
     // Add menu
     @State private var showingAddOptions = false
     
+    // Share
+    @State private var showingShareOptions = false
+    @State private var shareSelectedCSVs: Set<String> = []
+    @State private var exportRanges = false
+    @State private var shareItem: ExportShareItem?
+    
     // Keeps selected files at top (preserving order)
     private var orderedCSVFiles: [String] {
         let selected = csvFiles.filter { selectedCSVs.contains($0) }
         let unselected = csvFiles.filter { !selectedCSVs.contains($0) }
         return selected + unselected
+    }
+    
+    private var activeCSVFiles: [String] {
+        orderedCSVFiles.filter { selectedCSVs.contains($0) }
     }
     
     var body: some View {
@@ -116,7 +127,16 @@ struct DictView: View {
         }
         .navigationTitle("Select Word Lists")
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    shareSelectedCSVs = Set(activeCSVFiles)
+                    exportRanges = false
+                    showingShareOptions = true
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .disabled(activeCSVFiles.isEmpty)
+                
                 Button {
                     showingAddOptions = true
                 } label: {
@@ -158,6 +178,71 @@ struct DictView: View {
         ) { result in
             handleImport(result: result)
         }
+        .sheet(isPresented: $showingShareOptions) {
+            NavigationStack {
+                List {
+                    Section("CSV Files") {
+                        ForEach(activeCSVFiles, id: \.self) { file in
+                            Button {
+                                if shareSelectedCSVs.contains(file) {
+                                    shareSelectedCSVs.remove(file)
+                                } else {
+                                    shareSelectedCSVs.insert(file)
+                                }
+                            } label: {
+                                HStack {
+                                    Text(file)
+                                        .foregroundColor(.primary)
+                                    
+                                    Spacer()
+                                    
+                                    if shareSelectedCSVs.contains(file) {
+                                        Image(systemName: "checkmark")
+                                            .foregroundColor(.accentColor)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    Section {
+                        Toggle("Export ranges", isOn: $exportRanges)
+                    }
+                }
+                .navigationTitle("Export CSVs")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Cancel") {
+                            showingShareOptions = false
+                        }
+                    }
+                    
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Share") {
+                            do {
+                                let folderURL = try createExportFolder()
+                                showingShareOptions = false
+                                shareItem = ExportShareItem(url: folderURL)
+                            } catch {
+                                print("Export failed: \(error)")
+                            }
+                        }
+                        .disabled(shareSelectedCSVs.isEmpty)
+                    }
+                }
+            }
+        }
+        .sheet(item: $shareItem, onDismiss: {
+            if let url = shareItem?.url {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }) { item in
+            ActivityView(activityItems: [item.url]) {
+                try? FileManager.default.removeItem(at: item.url)
+                shareItem = nil
+            }
+        }
         .onAppear {
             loadUserCSVs()
         }
@@ -165,6 +250,7 @@ struct DictView: View {
             if let deletedName = notification.object as? String {
                 csvFiles.removeAll { $0 == deletedName }
                 selectedCSVs.remove(deletedName)
+                shareSelectedCSVs.remove(deletedName)
                 csvRanges[deletedName] = nil
                 sliderChangeTrigger += 1
             }
@@ -183,6 +269,41 @@ struct DictView: View {
         }
         
         return []
+    }
+    
+    // MARK: - Export
+    
+    private func createExportFolder() throws -> URL {
+        let tempRoot = FileManager.default.temporaryDirectory
+        let exportFolderURL = tempRoot.appendingPathComponent("CSVExport-\(UUID().uuidString)", isDirectory: true)
+        
+        try FileManager.default.createDirectory(at: exportFolderURL, withIntermediateDirectories: true)
+        
+        let selectedFilesInOrder = activeCSVFiles.filter { shareSelectedCSVs.contains($0) }
+        
+        for file in selectedFilesInOrder {
+            let sourceURL = getDocumentsURL(for: file)
+            let destinationURL = exportFolderURL.appendingPathComponent("\(file).csv")
+            
+            if FileManager.default.fileExists(atPath: sourceURL.path) {
+                try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+            }
+        }
+        
+        if exportRanges {
+            let cfgURL = exportFolderURL.appendingPathComponent("ranges.cfg")
+            let cfgContent = selectedFilesInOrder.map { file in
+                let range = csvRanges[file] ?? (0.0, 1.0)
+                let lowerPercent = Int(range.0 * 100)
+                let upperPercent = Int(range.1 * 100)
+                return "\(file)=\(lowerPercent)-\(upperPercent)"
+            }
+            .joined(separator: "\n")
+            
+            try cfgContent.write(to: cfgURL, atomically: true, encoding: .utf8)
+        }
+        
+        return exportFolderURL
     }
     
     // MARK: - Create New CSV
@@ -281,6 +402,7 @@ struct DictView: View {
     private func toggleSelection(_ file: String) {
         if selectedCSVs.contains(file) {
             selectedCSVs.remove(file)
+            shareSelectedCSVs.remove(file)
             csvRanges[file] = nil
         } else {
             selectedCSVs.insert(file)
@@ -290,6 +412,27 @@ struct DictView: View {
         }
         sliderChangeTrigger += 1
     }
+}
+
+private struct ExportShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+private struct ActivityView: UIViewControllerRepresentable {
+    
+    let activityItems: [Any]
+    var completion: (() -> Void)? = nil
+    
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            completion?()
+        }
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) { }
 }
 
 private struct RangeSlider: View {
