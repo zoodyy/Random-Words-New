@@ -13,7 +13,7 @@ struct DictView: View {
         "ownPhrases",   // own list of phrases
         "2kFictionByFreq",  //https://en.wiktionary.org/wiki/Wiktionary:Frequency_lists/Contemporary_fiction
         "2kPoetryByFreq",   //https://en.wiktionary.org/wiki/Wiktionary:Frequency_lists/Contemporary_poetry
-        "10kTVMovieByFreq", // https://en.wiktionary.org/wiki/Wiktionary:Frequency_lists/English/TV_and_Movie_Scripts_(2006)
+        "10kTVMovieByFreq", // https://en.wiktionary.org/wiki/Wiktionary:Frequency_lists/English/TV_and_Movie_Scripts_(2006) incomplete, finish later
         "10kGoogle1TByFreq",    // https://github.com/first20hours/google-10000-english 'google-10000-english-usa.txt'
         "20kGoogle1TByFreq",    // https://github.com/first20hours/google-10000-english '20k.txt'
         "30kEnglishByFreq", // https://github.com/arstgit/high-frequency-vocabulary '30k.txt'
