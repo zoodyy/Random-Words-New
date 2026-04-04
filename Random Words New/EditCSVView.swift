@@ -10,15 +10,16 @@ struct EditCSVView: View {
     let csvFileName: String
     let scrollToWord: String?
 
-    @State private var words: [String] = []
     @State private var originalOrder: [String] = []
     @State private var displayedIndices: [Int] = []
 
     @State private var newWord: String = ""
-    @State private var highlightedWord: String?
+    @State private var highlightedOriginalIndex: Int?
 
     @State private var sortMode: SortMode = .reverseOriginal
     @State private var showingDeleteConfirmation = false
+
+    @State private var visibleCount: Int = 0
 
     @Environment(\.dismiss) private var dismiss
 
@@ -28,6 +29,9 @@ struct EditCSVView: View {
         case alphabetical = "Alphabetical"
         case reverseAlphabetical = "Reverse Alphabetical"
     }
+
+    private let pageSize = 150
+    private let preloadThreshold = 20
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -46,17 +50,12 @@ struct EditCSVView: View {
                 }
 
                 Section {
-                    ForEach(words.indices, id: \.self) { index in
-                        TextField("Word", text: $words[index])
-                            .id(index)
-                            .onChange(of: words[index]) { _ in
-                                updateOriginalOrder(fromDisplayedIndex: index)
+                    ForEach(visibleDisplayedPositions, id: \.self) { displayedPosition in
+                        editableRow(for: displayedPosition)
+                            .id(displayedPosition)
+                            .onAppear {
+                                loadMoreIfNeeded(currentDisplayedPosition: displayedPosition)
                             }
-                            .listRowBackground(
-                                highlightedWord == words[index]
-                                ? Color.gray.opacity(0.5)
-                                : Color.clear
-                            )
                     }
                     .onDelete(perform: deleteWords)
                 }
@@ -98,11 +97,14 @@ struct EditCSVView: View {
                     ) {
                         Image(systemName: "square.and.arrow.up")
                     }
-                    .onTapGesture {
-                        saveCSV()
-                    }
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            saveCSV()
+                        }
+                    )
 
                     Button("Save") {
+                        removeNewestDuplicates()
                         saveCSV()
                         dismiss()
                     }
@@ -123,23 +125,8 @@ struct EditCSVView: View {
             .onAppear {
                 ensureFileExistsInDocuments()
                 loadCSV()
-
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    if let word = scrollToWord,
-                       let index = words.firstIndex(of: word) {
-                        highlightedWord = word
-                        withAnimation {
-                            proxy.scrollTo(index, anchor: .center)
-                        }
-
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                            highlightedWord = nil
-                        }
-                    }
-                }
+                scrollToRequestedWordIfNeeded(with: proxy)
             }
-            // ✅ FIX: If you navigate back after deleting, onDisappear was re-saving and recreating the CSV.
-            // Only auto-save if the file still exists.
             .onDisappear {
                 let url = getDocumentsURL()
                 if FileManager.default.fileExists(atPath: url.path) {
@@ -148,6 +135,38 @@ struct EditCSVView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func editableRow(for displayedPosition: Int) -> some View {
+        if let originalIndex = originalIndex(forDisplayedPosition: displayedPosition) {
+            TextField(
+                "Word",
+                text: Binding(
+                    get: { originalOrder[safe: originalIndex] ?? "" },
+                    set: { newValue in
+                        guard originalOrder.indices.contains(originalIndex) else { return }
+                        originalOrder[originalIndex] = newValue
+                    }
+                )
+            )
+            .listRowBackground(
+                highlightedOriginalIndex == originalIndex
+                ? Color.gray.opacity(0.5)
+                : Color.clear
+            )
+        }
+    }
+
+    private var visibleDisplayedPositions: [Int] {
+        Array(0..<min(visibleCount, displayedIndices.count))
+    }
+
+    private func originalIndex(forDisplayedPosition displayedPosition: Int) -> Int? {
+        guard displayedIndices.indices.contains(displayedPosition) else { return nil }
+        let originalIndex = displayedIndices[displayedPosition]
+        guard originalOrder.indices.contains(originalIndex) else { return nil }
+        return originalIndex
     }
 
     private func deleteCSVFile() {
@@ -187,6 +206,8 @@ struct EditCSVView: View {
             originalOrder = content
                 .components(separatedBy: .newlines)
                 .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        } else {
+            originalOrder = []
         }
 
         applyCurrentSort()
@@ -222,15 +243,41 @@ struct EditCSVView: View {
             }
         }
 
-        words = displayedIndices.map { originalOrder[$0] }
+        visibleCount = min(pageSize, displayedIndices.count)
     }
 
-    private func updateOriginalOrder(fromDisplayedIndex displayedIndex: Int) {
-        guard displayedIndices.indices.contains(displayedIndex) else { return }
-        let originalIndex = displayedIndices[displayedIndex]
-        guard originalOrder.indices.contains(originalIndex) else { return }
+    private func loadMoreIfNeeded(currentDisplayedPosition: Int) {
+        guard currentDisplayedPosition >= visibleCount - preloadThreshold else { return }
+        guard visibleCount < displayedIndices.count else { return }
 
-        originalOrder[originalIndex] = words[displayedIndex]
+        visibleCount = min(visibleCount + pageSize, displayedIndices.count)
+    }
+
+    private func scrollToRequestedWordIfNeeded(with proxy: ScrollViewProxy) {
+        guard let word = scrollToWord else { return }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            guard let originalIndex = originalOrder.firstIndex(of: word),
+                  let displayedPosition = displayedIndices.firstIndex(of: originalIndex) else {
+                return
+            }
+
+            highlightedOriginalIndex = originalIndex
+
+            if displayedPosition >= visibleCount {
+                visibleCount = min(displayedPosition + pageSize, displayedIndices.count)
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation {
+                    proxy.scrollTo(displayedPosition, anchor: .center)
+                }
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    highlightedOriginalIndex = nil
+                }
+            }
+        }
     }
 
     private func removeNewestDuplicates() {
@@ -281,16 +328,25 @@ struct EditCSVView: View {
 
     private func deleteWords(at offsets: IndexSet) {
         let originalIndicesToRemove = offsets
-            .compactMap { displayedIndices.indices.contains($0) ? displayedIndices[$0] : nil }
+            .compactMap { displayedPosition -> Int? in
+                guard displayedIndices.indices.contains(displayedPosition) else { return nil }
+                return displayedIndices[displayedPosition]
+            }
             .sorted(by: >)
 
-        for idx in originalIndicesToRemove {
-            if originalOrder.indices.contains(idx) {
-                originalOrder.remove(at: idx)
+        for index in originalIndicesToRemove {
+            if originalOrder.indices.contains(index) {
+                originalOrder.remove(at: index)
             }
         }
 
         applyCurrentSort()
         saveCSV()
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

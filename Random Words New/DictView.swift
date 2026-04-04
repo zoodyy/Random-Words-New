@@ -10,37 +10,39 @@ struct DictView: View {
     @Binding var sliderChangeTrigger: Int
     
     @State private var csvFiles: [String] = [
-        "ownVocab", // my own word list
-        "ownPhrases",   // own list of phrases
-        "2kFictionByFreq",  //https://en.wiktionary.org/wiki/Wiktionary:Frequency_lists/Contemporary_fiction
-        "2kPoetryByFreq",   //https://en.wiktionary.org/wiki/Wiktionary:Frequency_lists/Contemporary_poetry
-        "10kTVMovieByFreq", // https://en.wiktionary.org/wiki/Wiktionary:Frequency_lists/English/TV_and_Movie_Scripts_(2006) incomplete, finish later
-        "10kGoogle1TByFreq",    // https://github.com/first20hours/google-10000-english 'google-10000-english-usa.txt'
-        "20kGoogle1TByFreq",    // https://github.com/first20hours/google-10000-english '20k.txt'
-        "30kEnglishByFreq", // https://github.com/arstgit/high-frequency-vocabulary '30k.txt'
-        "45kEnglishByFreq", // first 45k from '333kEnglishByFreq'
-        "333kEnglishByFreq"   // https://www.kaggle.com/datasets/rtatman/english-word-frequency
+        "ownVocab",
+        "ownPhrases",
+        "2kFictionByFreq",
+        "2kPoetryByFreq",
+        "10kTVMovieByFreq",
+        "10kGoogle1TByFreq",
+        "20kGoogle1TByFreq",
+        "30kEnglishByFreq",
+        "45kEnglishByFreq",
+        "333kEnglishByFreq"
     ]
     
     @State private var csvToEdit: String?
     
-    // Create New
     @State private var showingNewCSVAlert = false
     @State private var newCSVName = ""
     
-    // Import
     @State private var showingImportPicker = false
-    
-    // Add menu
     @State private var showingAddOptions = false
     
-    // Share
     @State private var showingShareOptions = false
     @State private var shareSelectedCSVs: Set<String> = []
     @State private var exportRanges = false
     @State private var shareItem: ExportShareItem?
     
-    // Keeps selected files at top (preserving order)
+    @State private var csvPreviewInfo: [String: CSVPreviewInfo] = [:]
+    
+    private struct CSVPreviewInfo {
+        let count: Int
+        let lowerWord: String
+        let upperWord: String
+    }
+    
     private var orderedCSVFiles: [String] {
         let selected = csvFiles.filter { selectedCSVs.contains($0) }
         let unselected = csvFiles.filter { !selectedCSVs.contains($0) }
@@ -54,15 +56,13 @@ struct DictView: View {
     var body: some View {
         List {
             ForEach(orderedCSVFiles, id: \.self) { file in
-                
                 VStack(alignment: .leading, spacing: 8) {
                     
-                    // MARK: - Row
                     HStack {
                         Image(systemName: "doc.text")
                             .foregroundColor(.blue)
                         
-                        Text("\(file)")
+                        Text(file)
                         
                         Spacer()
                         
@@ -76,21 +76,13 @@ struct DictView: View {
                         toggleSelection(file)
                     }
                     
-                    // MARK: - Sliders
                     if selectedCSVs.contains(file) {
                         let range = csvRanges[file] ?? (0.0, 1.0)
-                        let wordsForFile = loadWords(for: file)
+                        let preview = csvPreviewInfo[file]
+                        let lowerWord = preview?.lowerWord ?? "-"
+                        let upperWord = preview?.upperWord ?? "-"
                         
-                        let lowerIndex = wordsForFile.isEmpty ? 0 :
-                            min(Int(Double(wordsForFile.count - 1) * range.0), wordsForFile.count - 1)
-                        
-                        let upperIndex = wordsForFile.isEmpty ? 0 :
-                            min(Int(Double(wordsForFile.count - 1) * range.1), wordsForFile.count - 1)
-                        
-                        let lowerWord = wordsForFile.indices.contains(lowerIndex) ? wordsForFile[lowerIndex] : "-"
-                        let upperWord = wordsForFile.indices.contains(upperIndex) ? wordsForFile[upperIndex] : "-"
-                        
-                        Text("\(Int(range.0*100))% (\(lowerWord))  -  \(Int(range.1*100))% (\(upperWord))")
+                        Text("\(Int(range.0 * 100))% (\(lowerWord))  -  \(Int(range.1 * 100))% (\(upperWord))")
                             .font(.subheadline)
                             .foregroundColor(.gray)
                         
@@ -100,6 +92,7 @@ struct DictView: View {
                                 set: { newValue in
                                     let upper = csvRanges[file]?.1 ?? 1.0
                                     csvRanges[file] = (min(newValue, upper), upper)
+                                    refreshPreviewInfo(for: file)
                                     sliderChangeTrigger += 1
                                 }
                             ),
@@ -108,6 +101,7 @@ struct DictView: View {
                                 set: { newValue in
                                     let lower = csvRanges[file]?.0 ?? 0.0
                                     csvRanges[file] = (lower, max(newValue, lower))
+                                    refreshPreviewInfo(for: file)
                                     sliderChangeTrigger += 1
                                 }
                             )
@@ -245,6 +239,7 @@ struct DictView: View {
         }
         .onAppear {
             loadUserCSVs()
+            refreshAllSelectedPreviewInfo()
         }
         .onReceive(NotificationCenter.default.publisher(for: .csvDeleted)) { notification in
             if let deletedName = notification.object as? String {
@@ -252,26 +247,11 @@ struct DictView: View {
                 selectedCSVs.remove(deletedName)
                 shareSelectedCSVs.remove(deletedName)
                 csvRanges[deletedName] = nil
+                csvPreviewInfo[deletedName] = nil
                 sliderChangeTrigger += 1
             }
         }
     }
-    
-    // MARK: - Load Words For Boundary Display
-    
-    private func loadWords(for file: String) -> [String] {
-        let url = getDocumentsURL(for: file)
-        
-        if let content = try? String(contentsOf: url) {
-            return content
-                .components(separatedBy: .newlines)
-                .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        }
-        
-        return []
-    }
-    
-    // MARK: - Export
     
     private func createExportFolder() throws -> URL {
         let tempRoot = FileManager.default.temporaryDirectory
@@ -282,7 +262,7 @@ struct DictView: View {
         let selectedFilesInOrder = activeCSVFiles.filter { shareSelectedCSVs.contains($0) }
         
         for file in selectedFilesInOrder {
-            let sourceURL = getDocumentsURL(for: file)
+            let sourceURL = getReadableURL(for: file)
             let destinationURL = exportFolderURL.appendingPathComponent("\(file).csv")
             
             if FileManager.default.fileExists(atPath: sourceURL.path) {
@@ -306,8 +286,6 @@ struct DictView: View {
         return exportFolderURL
     }
     
-    // MARK: - Create New CSV
-    
     private func createNewCSV() {
         let trimmed = newCSVName
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -323,12 +301,11 @@ struct DictView: View {
         csvFiles.insert(trimmed, at: 0)
         selectedCSVs.insert(trimmed)
         csvRanges[trimmed] = (0.0, 1.0)
+        refreshPreviewInfo(for: trimmed)
         
         newCSVName = ""
         sliderChangeTrigger += 1
     }
-    
-    // MARK: - Import
     
     private func handleImport(result: Result<[URL], Error>) {
         do {
@@ -362,6 +339,7 @@ struct DictView: View {
                 }
             }
             
+            refreshAllSelectedPreviewInfo()
             sliderChangeTrigger += 1
             
         } catch {
@@ -396,6 +374,8 @@ struct DictView: View {
         if csvRanges[cleanedName] == nil {
             csvRanges[cleanedName] = (0.0, 1.0)
         }
+        
+        refreshPreviewInfo(for: cleanedName)
     }
     
     private func importFolder(from folderURL: URL) throws {
@@ -419,7 +399,9 @@ struct DictView: View {
             
             if ext == "csv" {
                 let importedName = try copyCSVToDocuments(from: fileURL)
-                importedCSVNames.append(importedName)
+                if !importedName.isEmpty {
+                    importedCSVNames.append(importedName)
+                }
             } else if ext == "txt" && txtURL == nil {
                 txtURL = fileURL
             }
@@ -433,6 +415,7 @@ struct DictView: View {
                 if csvRanges[name] == nil {
                     csvRanges[name] = (0.0, 1.0)
                 }
+                refreshPreviewInfo(for: name)
             }
         }
     }
@@ -476,6 +459,7 @@ struct DictView: View {
         
         for existingFile in csvFiles {
             csvRanges[existingFile] = nil
+            csvPreviewInfo[existingFile] = nil
         }
         
         for (fileName, range) in parsedRanges {
@@ -488,6 +472,7 @@ struct DictView: View {
                 
                 selectedCSVs.insert(fileName)
                 csvRanges[fileName] = range
+                refreshPreviewInfo(for: fileName)
             }
         }
     }
@@ -530,8 +515,6 @@ struct DictView: View {
         return result
     }
     
-    // MARK: - Load Existing User CSVs
-    
     private func loadUserCSVs() {
         let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         
@@ -555,20 +538,71 @@ struct DictView: View {
             .appendingPathComponent("\(name).csv")
     }
     
-    // MARK: - Selection
+    private func getReadableURL(for name: String) -> URL {
+        let documentsURL = getDocumentsURL(for: name)
+        if FileManager.default.fileExists(atPath: documentsURL.path) {
+            return documentsURL
+        }
+        
+        if let bundleURL = Bundle.main.url(forResource: name, withExtension: "csv") {
+            return bundleURL
+        }
+        
+        return documentsURL
+    }
     
     private func toggleSelection(_ file: String) {
         if selectedCSVs.contains(file) {
             selectedCSVs.remove(file)
             shareSelectedCSVs.remove(file)
             csvRanges[file] = nil
+            csvPreviewInfo[file] = nil
         } else {
             selectedCSVs.insert(file)
             if csvRanges[file] == nil {
                 csvRanges[file] = (0.0, 1.0)
             }
+            refreshPreviewInfo(for: file)
         }
         sliderChangeTrigger += 1
+    }
+    
+    private func refreshAllSelectedPreviewInfo() {
+        for file in selectedCSVs {
+            refreshPreviewInfo(for: file)
+        }
+    }
+    
+    private func refreshPreviewInfo(for file: String) {
+        let range = csvRanges[file] ?? (0.0, 1.0)
+        let url = getReadableURL(for: file)
+        
+        guard let content = try? String(contentsOf: url) else {
+            csvPreviewInfo[file] = CSVPreviewInfo(count: 0, lowerWord: "-", upperWord: "-")
+            return
+        }
+        
+        let lines = content
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        
+        guard !lines.isEmpty else {
+            csvPreviewInfo[file] = CSVPreviewInfo(count: 0, lowerWord: "-", upperWord: "-")
+            return
+        }
+        
+        let lowerIndex = min(Int(Double(lines.count - 1) * range.0), lines.count - 1)
+        let upperIndex = min(Int(Double(lines.count - 1) * range.1), lines.count - 1)
+        
+        let lowerWord = lines.indices.contains(lowerIndex) ? lines[lowerIndex] : "-"
+        let upperWord = lines.indices.contains(upperIndex) ? lines[upperIndex] : "-"
+        
+        csvPreviewInfo[file] = CSVPreviewInfo(
+            count: lines.count,
+            lowerWord: lowerWord,
+            upperWord: upperWord
+        )
     }
 }
 

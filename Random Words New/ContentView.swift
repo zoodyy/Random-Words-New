@@ -3,8 +3,6 @@ import UIKit
 
 struct ContentView: View {
     
-    // MARK: - Theme
-    
     enum AppTheme: String, CaseIterable, Identifiable {
         case system = "System"
         case light = "Light"
@@ -16,9 +14,35 @@ struct ContentView: View {
         var lower: Double
         var upper: Double
     }
-
-    // MARK: - Persistent Storage
     
+    private struct CSVWordPool {
+        let words: [String]
+        let lowerBound: Int
+        let upperBound: Int
+        let eligibleIndices: [Int]?
+        
+        var count: Int {
+            if let eligibleIndices {
+                return eligibleIndices.count
+            }
+            return max(upperBound - lowerBound, 0)
+        }
+        
+        func word(atEligibleOffset offset: Int) -> String? {
+            guard offset >= 0, offset < count else { return nil }
+            
+            if let eligibleIndices {
+                let actualIndex = eligibleIndices[offset]
+                guard words.indices.contains(actualIndex) else { return nil }
+                return words[actualIndex]
+            } else {
+                let actualIndex = lowerBound + offset
+                guard words.indices.contains(actualIndex) else { return nil }
+                return words[actualIndex]
+            }
+        }
+    }
+
     @AppStorage("switchInterval") private var switchInterval: Double = 3
     @AppStorage("numberOfWordsToShow") private var numberOfWordsToShow: Int = 1
     @AppStorage("fairWordDistribution") private var fairWordDistribution: Bool = false
@@ -30,8 +54,6 @@ struct ContentView: View {
     @AppStorage("csvRangesData") private var csvRangesData: Data = Data()
     @AppStorage("minLengthExcludedCSVsData") private var minLengthExcludedCSVsData: Data = Data()
     
-    // MARK: - Runtime State
-    
     @State private var selectedCSVs: Set<String> = []
     @State private var csvRanges: [String: RangePair] = [:]
     @State private var selectedWords: [String] = []
@@ -39,6 +61,11 @@ struct ContentView: View {
     @State private var sliderChangeTrigger = 0
     @State private var allWordsPerCSV: [String: [String]] = [:]
     @State private var minLengthExcludedCSVs: Set<String> = []
+    
+    @State private var wordPools: [String: CSVWordPool] = [:]
+    @State private var orderedActiveCSVs: [String] = []
+    @State private var totalEligibleWordCount: Int = 0
+    @State private var firstSelectedWordSourceCSV: String?
     
     @State private var swipeOffset: CGFloat = 0
     @State private var swipeUpOffset: CGFloat = 0
@@ -49,14 +76,10 @@ struct ContentView: View {
     @State private var navigateToCSV: String?
     @State private var selectedWordSource: (csv: String, word: String)?
     
-    // ✅ History for previous word(s)
     @State private var wordHistory: [[String]] = []
     @State private var historyIndex: Int = -1
     
-    // ✅ Limit history to last 100 entries
     private let maxHistoryCount: Int = 100
-    
-    // MARK: - Shared Swipe Gesture
     
     private var swipeGesture: some Gesture {
         DragGesture()
@@ -72,8 +95,6 @@ struct ContentView: View {
                 }
             }
     }
-    
-    // MARK: - Theme
     
     private var selectedTheme: AppTheme {
         AppTheme(rawValue: selectedThemeRaw) ?? .system
@@ -155,18 +176,36 @@ struct ContentView: View {
                     loadPersistedData()
                     loadCSVs()
                 }
-                .onChange(of: selectedCSVs) { _ in saveCSVs() }
-                .onChange(of: csvRanges) { _ in saveRanges() }
-                .onChange(of: minLengthExcludedCSVs) { _ in saveMinLengthExcludedCSVs() }
-                .onChange(of: switchInterval) { _ in updateTimer() }
-                .onChange(of: numberOfWordsToShow) { _ in selectRandomWords(recordHistory: true) }
-                .onChange(of: fairWordDistribution) { _ in selectRandomWords(recordHistory: true) }
-                .onChange(of: minimumWordLength) { _ in selectRandomWords(recordHistory: true) }
+                .onChange(of: selectedCSVs) { _ in
+                    saveCSVs()
+                    loadCSVs()
+                }
+                .onChange(of: csvRanges) { _ in
+                    saveRanges()
+                    rebuildWordPools()
+                    selectRandomWords(recordHistory: true)
+                }
+                .onChange(of: minLengthExcludedCSVs) { _ in
+                    saveMinLengthExcludedCSVs()
+                    rebuildWordPools()
+                    selectRandomWords(recordHistory: true)
+                }
+                .onChange(of: switchInterval) { _ in
+                    updateTimer()
+                }
+                .onChange(of: numberOfWordsToShow) { _ in
+                    selectRandomWords(recordHistory: true)
+                }
+                .onChange(of: fairWordDistribution) { _ in
+                    selectRandomWords(recordHistory: true)
+                }
+                .onChange(of: minimumWordLength) { _ in
+                    rebuildWordPools()
+                    selectRandomWords(recordHistory: true)
+                }
         }
         .preferredColorScheme(colorScheme)
     }
-    
-    // MARK: - Main Content
     
     private func mainContent() -> some View {
         ZStack {
@@ -249,7 +288,7 @@ struct ContentView: View {
                 
                 Spacer()
                 
-                Text(filteredWords.isEmpty ? "No words available" : "")
+                Text(hasAvailableWords ? "" : "No words available")
                     .foregroundColor(.gray)
                     .padding(.bottom, 40)
             }
@@ -257,12 +296,14 @@ struct ContentView: View {
         .contentShape(Rectangle())
         .gesture(swipeGesture)
         .onTapGesture {
-            guard !filteredWords.isEmpty else { return }
+            guard hasAvailableWords else { return }
             selectRandomWords(recordHistory: true)
         }
     }
     
-    // ✅ Helpers for wrapping decision / break behavior
+    private var hasAvailableWords: Bool {
+        totalEligibleWordCount > 0
+    }
     
     private func needsWrapping(text: String, baseFontSize: CGFloat, availableWidth: CGFloat, minScale: CGFloat) -> Bool {
         let font = UIFont.boldSystemFont(ofSize: baseFontSize)
@@ -288,8 +329,6 @@ struct ContentView: View {
     private func letterCount(of word: String) -> Int {
         word.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
     }
-    
-    // MARK: - Swipe Handling
     
     private func handleLeftSwipe() {
         pauseTimer()
@@ -331,21 +370,15 @@ struct ContentView: View {
         }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            for csv in selectedCSVs {
-                if let words = allWordsPerCSV[csv],
-                   words.contains(word) {
-                    
-                    selectedWordSource = (csv, word)
-                    
-                    swipeUpOffset = 0
-                    navigateToCSV = csv
-                    break
-                }
+            if let csv = firstSelectedWordSourceCSV {
+                selectedWordSource = (csv, word)
+                swipeUpOffset = 0
+                navigateToCSV = csv
+            } else {
+                swipeUpOffset = 0
             }
         }
     }
-    
-    // MARK: - Remaining Logic
     
     private func addToOwnVocab(_ wordsToAdd: [String]) {
         let fileURL = getOwnVocabURL()
@@ -415,52 +448,24 @@ struct ContentView: View {
         }
     }
     
-    private var filteredWords: [String] {
-        var combined: [String] = []
-        
-        for csv in selectedCSVs {
-            guard let range = csvRanges[csv],
-                  let words = allWordsPerCSV[csv] else { continue }
-            
-            let total = words.count
-            let lower = Int(Double(total) * range.lower)
-            let upper = Int(Double(total) * range.upper)
-            
-            if lower < upper {
-                let rangedWords = Array(words[lower..<upper])
-                
-                if minLengthExcludedCSVs.contains(csv) {
-                    combined.append(contentsOf: rangedWords)
-                } else {
-                    combined.append(contentsOf: rangedWords.filter { letterCount(of: $0) >= minimumWordLength })
-                }
-            }
-        }
-        
-        return combined
-    }
-    
     private func selectRandomWords(recordHistory: Bool = true) {
         updateTimer()
         
-        let newSelection: [String]
-        if fairWordDistribution {
-            newSelection = generateFairWords()
-        } else {
-            newSelection = Array(filteredWords.shuffled()
-                .prefix(min(numberOfWordsToShow, filteredWords.count)))
-        }
+        let selection = fairWordDistribution
+            ? generateFairSelection()
+            : generateCombinedPoolSelection()
         
-        selectedWords = newSelection
+        selectedWords = selection.words
+        firstSelectedWordSourceCSV = selection.firstSourceCSV
         
-        guard recordHistory, !newSelection.isEmpty else { return }
+        guard recordHistory, !selection.words.isEmpty else { return }
         
         if historyIndex >= 0, historyIndex < wordHistory.count - 1 {
             wordHistory = Array(wordHistory.prefix(historyIndex + 1))
         }
         
-        if wordHistory.last != newSelection {
-            wordHistory.append(newSelection)
+        if wordHistory.last != selection.words {
+            wordHistory.append(selection.words)
             
             if wordHistory.count > maxHistoryCount {
                 let overflow = wordHistory.count - maxHistoryCount
@@ -471,52 +476,78 @@ struct ContentView: View {
         historyIndex = wordHistory.count - 1
     }
     
-    private func generateFairWords() -> [String] {
+    private func generateFairSelection() -> (words: [String], firstSourceCSV: String?) {
+        let activeCSVNames = orderedActiveCSVs.filter { (wordPools[$0]?.count ?? 0) > 0 }
+        guard !activeCSVNames.isEmpty else { return ([], nil) }
+        
         var results: [String] = []
-        let active = selectedCSVs.filter {
-            guard let range = csvRanges[$0],
-                  let words = allWordsPerCSV[$0]
-            else { return false }
+        var firstSource: String?
+        
+        for _ in 0..<numberOfWordsToShow {
+            guard let randomCSV = activeCSVNames.randomElement(),
+                  let pool = wordPools[randomCSV],
+                  pool.count > 0 else {
+                continue
+            }
             
-            let total = words.count
-            let lower = Int(Double(total) * range.lower)
-            let upper = Int(Double(total) * range.upper)
-            guard lower < upper else { return false }
-            
-            let rangedWords = Array(words[lower..<upper])
-            if minLengthExcludedCSVs.contains($0) {
-                return !rangedWords.isEmpty
-            } else {
-                return rangedWords.contains { letterCount(of: $0) >= minimumWordLength }
+            let randomOffset = Int.random(in: 0..<pool.count)
+            if let word = pool.word(atEligibleOffset: randomOffset) {
+                if firstSource == nil {
+                    firstSource = randomCSV
+                }
+                results.append(word)
             }
         }
         
-        for _ in 0..<numberOfWordsToShow {
-            guard let randomCSV = active.randomElement(),
-                  let range = csvRanges[randomCSV],
-                  let words = allWordsPerCSV[randomCSV]
-            else { continue }
-            
-            let total = words.count
-            let lower = Int(Double(total) * range.lower)
-            let upper = Int(Double(total) * range.upper)
-            
-            if lower < upper {
-                let rangedWords = Array(words[lower..<upper])
-                let eligibleWords: [String]
-                
-                if minLengthExcludedCSVs.contains(randomCSV) {
-                    eligibleWords = rangedWords
-                } else {
-                    eligibleWords = rangedWords.filter { letterCount(of: $0) >= minimumWordLength }
+        return (results, firstSource)
+    }
+    
+    private func generateCombinedPoolSelection() -> (words: [String], firstSourceCSV: String?) {
+        guard totalEligibleWordCount > 0 else { return ([], nil) }
+        
+        let desiredCount = min(numberOfWordsToShow, totalEligibleWordCount)
+        var selectedGlobalOffsets = Set<Int>()
+        
+        while selectedGlobalOffsets.count < desiredCount {
+            selectedGlobalOffsets.insert(Int.random(in: 0..<totalEligibleWordCount))
+        }
+        
+        let sortedOffsets = selectedGlobalOffsets.sorted()
+        
+        var results: [String] = []
+        var firstSource: String?
+        
+        for globalOffset in sortedOffsets {
+            if let resolved = resolveGlobalEligibleOffset(globalOffset) {
+                if firstSource == nil {
+                    firstSource = resolved.csv
                 }
-                
-                if let word = eligibleWords.randomElement() {
-                    results.append(word)
-                }
+                results.append(resolved.word)
             }
         }
-        return results
+        
+        return (results, firstSource)
+    }
+    
+    private func resolveGlobalEligibleOffset(_ globalOffset: Int) -> (csv: String, word: String)? {
+        var runningTotal = 0
+        
+        for csv in orderedActiveCSVs {
+            guard let pool = wordPools[csv], pool.count > 0 else { continue }
+            let nextTotal = runningTotal + pool.count
+            
+            if globalOffset < nextTotal {
+                let localOffset = globalOffset - runningTotal
+                if let word = pool.word(atEligibleOffset: localOffset) {
+                    return (csv, word)
+                }
+                return nil
+            }
+            
+            runningTotal = nextTotal
+        }
+        
+        return nil
     }
     
     private func loadCSVs() {
@@ -544,11 +575,70 @@ struct ContentView: View {
             }
         }
         
+        rebuildWordPools()
+        
         wordHistory.removeAll()
         historyIndex = -1
         
         selectRandomWords(recordHistory: true)
         updateTimer()
+    }
+    
+    private func rebuildWordPools() {
+        var newPools: [String: CSVWordPool] = [:]
+        var newOrderedActiveCSVs: [String] = []
+        var newTotalEligibleWordCount = 0
+        
+        for csv in selectedCSVs {
+            guard let range = csvRanges[csv],
+                  let words = allWordsPerCSV[csv] else {
+                continue
+            }
+            
+            let total = words.count
+            guard total > 0 else { continue }
+            
+            let lower = min(max(Int(Double(total) * range.lower), 0), total)
+            let upper = min(max(Int(Double(total) * range.upper), lower), total)
+            guard lower < upper else { continue }
+            
+            let pool: CSVWordPool
+            
+            if minLengthExcludedCSVs.contains(csv) {
+                pool = CSVWordPool(
+                    words: words,
+                    lowerBound: lower,
+                    upperBound: upper,
+                    eligibleIndices: nil
+                )
+            } else {
+                var indices: [Int] = []
+                indices.reserveCapacity(upper - lower)
+                
+                for index in lower..<upper {
+                    if letterCount(of: words[index]) >= minimumWordLength {
+                        indices.append(index)
+                    }
+                }
+                
+                pool = CSVWordPool(
+                    words: words,
+                    lowerBound: lower,
+                    upperBound: upper,
+                    eligibleIndices: indices
+                )
+            }
+            
+            if pool.count > 0 {
+                newPools[csv] = pool
+                newOrderedActiveCSVs.append(csv)
+                newTotalEligibleWordCount += pool.count
+            }
+        }
+        
+        wordPools = newPools
+        orderedActiveCSVs = newOrderedActiveCSVs
+        totalEligibleWordCount = newTotalEligibleWordCount
     }
     
     private func updateTimer() {
