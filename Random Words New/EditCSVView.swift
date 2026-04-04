@@ -12,8 +12,11 @@ struct EditCSVView: View {
 
     @State private var originalOrder: [String] = []
     @State private var displayedIndices: [Int] = []
+    @State private var filteredDisplayedIndices: [Int] = []
 
     @State private var newWord: String = ""
+    @State private var searchText: String = ""
+    @State private var isSearchVisible = false
     @State private var highlightedOriginalIndex: Int?
 
     @State private var sortMode: SortMode = .reverseOriginal
@@ -39,14 +42,24 @@ struct EditCSVView: View {
             List {
 
                 Section(header: Text("Add New Word")) {
-                    HStack {
-                        TextField("New word", text: $newWord)
-                            .textInputAutocapitalization(.never)
+                    VStack(spacing: 8) {
+                        HStack {
+                            TextField("New word", text: $newWord)
+                                .textInputAutocapitalization(.never)
 
-                        Button("Add") {
-                            addWord()
+                            Button("Add") {
+                                addWord()
+                            }
+                            .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
-                        .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                        if isSearchVisible {
+                            TextField("Search words", text: $searchText)
+                                .textInputAutocapitalization(.never)
+                                .onChange(of: searchText) { _ in
+                                    applySearchAndPagination()
+                                }
+                        }
                     }
                 }
 
@@ -104,10 +117,10 @@ struct EditCSVView: View {
                         }
                     )
 
-                    Button("Save") {
-                        removeNewestDuplicates()
-                        saveCSV()
-                        dismiss()
+                    Button {
+                        toggleSearch()
+                    } label: {
+                        Image(systemName: isSearchVisible ? "magnifyingglass.circle.fill" : "magnifyingglass")
                     }
                 }
             }
@@ -150,6 +163,7 @@ struct EditCSVView: View {
                     set: { newValue in
                         guard originalOrder.indices.contains(originalIndex) else { return }
                         originalOrder[originalIndex] = newValue
+                        applySearchAndPagination(keepVisibleCount: true)
                     }
                 )
             )
@@ -161,13 +175,17 @@ struct EditCSVView: View {
         }
     }
 
+    private var currentDisplayedIndices: [Int] {
+        filteredDisplayedIndices
+    }
+
     private var visibleDisplayedPositions: [Int] {
-        Array(0..<min(visibleCount, displayedIndices.count))
+        Array(0..<min(visibleCount, currentDisplayedIndices.count))
     }
 
     private func originalIndex(forDisplayedPosition displayedPosition: Int) -> Int? {
-        guard displayedIndices.indices.contains(displayedPosition) else { return nil }
-        let originalIndex = displayedIndices[displayedPosition]
+        guard currentDisplayedIndices.indices.contains(displayedPosition) else { return nil }
+        let originalIndex = currentDisplayedIndices[displayedPosition]
         guard originalOrder.indices.contains(originalIndex) else { return nil }
         return originalIndex
     }
@@ -248,14 +266,33 @@ struct EditCSVView: View {
             }
         }
 
-        visibleCount = min(pageSize, displayedIndices.count)
+        applySearchAndPagination()
+    }
+
+    private func applySearchAndPagination(keepVisibleCount: Bool = false) {
+        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmedSearch.isEmpty {
+            filteredDisplayedIndices = displayedIndices
+        } else {
+            filteredDisplayedIndices = displayedIndices.filter { index in
+                guard originalOrder.indices.contains(index) else { return false }
+                return originalOrder[index].localizedCaseInsensitiveContains(trimmedSearch)
+            }
+        }
+
+        if keepVisibleCount {
+            visibleCount = min(max(visibleCount, pageSize), filteredDisplayedIndices.count)
+        } else {
+            visibleCount = min(pageSize, filteredDisplayedIndices.count)
+        }
     }
 
     private func loadMoreIfNeeded(currentDisplayedPosition: Int) {
         guard currentDisplayedPosition >= visibleCount - preloadThreshold else { return }
-        guard visibleCount < displayedIndices.count else { return }
+        guard visibleCount < currentDisplayedIndices.count else { return }
 
-        visibleCount = min(visibleCount + pageSize, displayedIndices.count)
+        visibleCount = min(visibleCount + pageSize, currentDisplayedIndices.count)
     }
 
     private func scrollToRequestedWordIfNeeded(with proxy: ScrollViewProxy) {
@@ -263,14 +300,14 @@ struct EditCSVView: View {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             guard let originalIndex = originalOrder.firstIndex(of: word),
-                  let displayedPosition = displayedIndices.firstIndex(of: originalIndex) else {
+                  let displayedPosition = currentDisplayedIndices.firstIndex(of: originalIndex) else {
                 return
             }
 
             highlightedOriginalIndex = originalIndex
 
             if displayedPosition >= visibleCount {
-                visibleCount = min(displayedPosition + pageSize, displayedIndices.count)
+                visibleCount = min(displayedPosition + pageSize, currentDisplayedIndices.count)
             }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -334,8 +371,8 @@ struct EditCSVView: View {
     private func deleteWords(at offsets: IndexSet) {
         let originalIndicesToRemove = offsets
             .compactMap { displayedPosition -> Int? in
-                guard displayedIndices.indices.contains(displayedPosition) else { return nil }
-                return displayedIndices[displayedPosition]
+                guard currentDisplayedIndices.indices.contains(displayedPosition) else { return nil }
+                return currentDisplayedIndices[displayedPosition]
             }
             .sorted(by: >)
 
@@ -347,6 +384,16 @@ struct EditCSVView: View {
 
         applyCurrentSort()
         saveCSV()
+    }
+
+    private func toggleSearch() {
+        isSearchVisible.toggle()
+
+        if !isSearchVisible {
+            searchText = ""
+        }
+
+        applySearchAndPagination()
     }
 }
 
