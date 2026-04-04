@@ -18,6 +18,7 @@ struct EditCSVView: View {
 
     @State private var sortMode: SortMode = .reverseOriginal
     @State private var showingDeleteConfirmation = false
+    @State private var wasDeleted = false
 
     @State private var visibleCount: Int = 0
 
@@ -128,6 +129,8 @@ struct EditCSVView: View {
                 scrollToRequestedWordIfNeeded(with: proxy)
             }
             .onDisappear {
+                guard !wasDeleted else { return }
+
                 let url = getDocumentsURL()
                 if FileManager.default.fileExists(atPath: url.path) {
                     removeNewestDuplicates()
@@ -176,6 +179,8 @@ struct EditCSVView: View {
             if FileManager.default.fileExists(atPath: fileURL.path) {
                 try FileManager.default.removeItem(at: fileURL)
             }
+
+            wasDeleted = true
 
             NotificationCenter.default.post(
                 name: .csvDeleted,
