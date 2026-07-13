@@ -135,53 +135,35 @@ struct SettingsView: View {
     }
 
     private var appearancesSettings: some View {
-        ScrollView {
-            VStack(spacing: 15) {
-
-                Text("Appearance")
-                    .font(.headline)
-
+        Form {
+            Section("Appearance") {
                 Picker("Theme", selection: $selectedThemeRaw) {
                     Text("System").tag("System")
                     Text("Light").tag("Light")
                     Text("Dark").tag("Dark")
                 }
                 .pickerStyle(.segmented)
-                .padding(.horizontal)
+            }
 
-                Divider()
-
-                Text("Orientation")
-                    .font(.headline)
-
+            Section("Orientation") {
                 Picker("Orientation", selection: $orientationLockRaw) {
                     ForEach(OrientationLock.allCases, id: \.rawValue) { lock in
                         Text(lock.rawValue).tag(lock.rawValue)
                     }
                 }
                 .pickerStyle(.segmented)
-                .padding(.horizontal)
                 .onChange(of: orientationLockRaw) {
                     (OrientationLock(rawValue: orientationLockRaw) ?? .none).apply()
                 }
+            }
 
-                Divider()
-
+            Section {
                 NavigationLink {
                     CustomiseWordScreenView()
                 } label: {
-                    HStack {
-                        Label("Customise Random Word Screen", systemImage: "paintpalette")
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal)
+                    Label("Customise Random Word Screen", systemImage: "paintpalette")
                 }
-                .foregroundStyle(.primary)
             }
-            .padding()
         }
         .navigationTitle("Appearances")
     }
