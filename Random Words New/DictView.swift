@@ -9,18 +9,7 @@ struct DictView: View {
     @Binding var csvRanges: [String: (Double, Double)]
     @Binding var sliderChangeTrigger: Int
     
-    @State private var csvFiles: [String] = [
-        "ownVocab",
-        "ownPhrases",
-        "2kFictionByFreq",
-        "2kPoetryByFreq",
-        "10kTVMovieByFreq",
-        "10kGoogle1TByFreq",
-        "20kGoogle1TByFreq",
-        "30kEnglishByFreq",
-        "45kEnglishByFreq",
-        "333kEnglishByFreq"
-    ]
+    @State private var csvFiles: [String] = []
     
     @State private var csvToEdit: String?
     
@@ -238,6 +227,7 @@ struct DictView: View {
             }
         }
         .onAppear {
+            loadBundledCSVs()
             loadUserCSVs()
             refreshAllSelectedPreviewInfo()
         }
@@ -523,6 +513,14 @@ struct DictView: View {
         return result
     }
     
+    private func loadBundledCSVs() {
+        for name in BundledWordlists.names() {
+            if !csvFiles.contains(name) {
+                csvFiles.append(name)
+            }
+        }
+    }
+
     private func loadUserCSVs() {
         let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         
@@ -552,7 +550,7 @@ struct DictView: View {
             return documentsURL
         }
         
-        if let bundleURL = Bundle.main.url(forResource: name, withExtension: "csv") {
+        if let bundleURL = BundledWordlists.url(named: name) {
             return bundleURL
         }
         

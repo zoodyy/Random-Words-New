@@ -216,8 +216,8 @@ struct EditCSVView: View {
         let docURL = getDocumentsURL()
 
         if !FileManager.default.fileExists(atPath: docURL.path) {
-            if let bundlePath = Bundle.main.path(forResource: csvFileName, ofType: "csv") {
-                try? FileManager.default.copyItem(atPath: bundlePath, toPath: docURL.path)
+            if let bundleURL = BundledWordlists.url(named: csvFileName) {
+                try? FileManager.default.copyItem(at: bundleURL, to: docURL)
             }
         }
     }

@@ -136,10 +136,8 @@ struct ContentView: View {
             }
         }
         
-        if let bundleFiles = Bundle.main.urls(forResourcesWithExtension: "csv", subdirectory: nil) {
-            for file in bundleFiles {
-                names.insert(file.deletingPathExtension().lastPathComponent)
-            }
+        for name in BundledWordlists.names() {
+            names.insert(name)
         }
         
         return names.sorted()
@@ -679,8 +677,8 @@ struct ContentView: View {
             
             if FileManager.default.fileExists(atPath: documentsURL.path) {
                 content = try? String(contentsOf: documentsURL)
-            } else if let bundlePath = Bundle.main.path(forResource: csv, ofType: "csv") {
-                content = try? String(contentsOfFile: bundlePath)
+            } else if let bundleURL = BundledWordlists.url(named: csv) {
+                content = try? String(contentsOf: bundleURL)
             }
             
             if let content = content {
