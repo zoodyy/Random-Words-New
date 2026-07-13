@@ -58,7 +58,7 @@ struct SettingsView: View {
             NavigationLink {
                 randomWordsSettings
             } label: {
-                Label("Random Words", systemImage: "textformat.abc")
+                Label("Random Word Behaviour", systemImage: "textformat.abc")
             }
 
             NavigationLink {
