@@ -53,6 +53,9 @@ struct ContentView: View {
     @AppStorage("selectedCSVsData") private var selectedCSVsData: Data = Data()
     @AppStorage("csvRangesData") private var csvRangesData: Data = Data()
     @AppStorage("minLengthExcludedCSVsData") private var minLengthExcludedCSVsData: Data = Data()
+    @AppStorage("wordHistoryData") private var wordHistoryData: Data = Data()
+    @AppStorage("savedHistoryIndex") private var savedHistoryIndex: Int = -1
+    @AppStorage("savedWordSourceCSV") private var savedWordSourceCSV: String = ""
     
     @State private var selectedCSVs: Set<String> = []
     @State private var csvRanges: [String: RangePair] = [:]
@@ -83,6 +86,7 @@ struct ContentView: View {
     @State private var hasLoadedOnce = false
     @State private var isScreenVisible = false
     @State private var wasTimerRunningBeforeDisappear = false
+    @State private var isRestoringState = false
     
     private let maxHistoryCount: Int = 100
     
@@ -197,8 +201,25 @@ struct ContentView: View {
                         }
                     } else {
                         hasLoadedOnce = true
+                        isRestoringState = true
                         loadPersistedData()
-                        loadCSVs()
+                        reloadCSVContents()
+
+                        if historyIndex >= 0, historyIndex < wordHistory.count {
+                            selectedWords = wordHistory[historyIndex]
+                        } else {
+                            selectRandomWords(recordHistory: true)
+                        }
+
+                        updateTimer()
+
+                        // The restore above mutates selectedCSVs/csvRanges/
+                        // minLengthExcludedCSVs, whose onChange handlers would
+                        // discard the restored word and history. Lift the guard
+                        // once those initial updates have settled.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            isRestoringState = false
+                        }
                     }
                 }
                 .onDisappear {
@@ -207,15 +228,18 @@ struct ContentView: View {
                     pauseTimer()
                 }
                 .onChange(of: selectedCSVs) { _ in
+                    guard !isRestoringState else { return }
                     saveCSVs()
                     loadCSVs()
                 }
                 .onChange(of: csvRanges) { _ in
+                    guard !isRestoringState else { return }
                     saveRanges()
                     rebuildWordPools()
                     selectRandomWords(recordHistory: true)
                 }
                 .onChange(of: minLengthExcludedCSVs) { _ in
+                    guard !isRestoringState else { return }
                     saveMinLengthExcludedCSVs()
                     rebuildWordPools()
                     selectRandomWords(recordHistory: true)
@@ -387,6 +411,7 @@ struct ContentView: View {
             historyIndex -= 1
             selectedWords = wordHistory[historyIndex]
             swipeOffset = 0
+            saveHistoryState()
         }
     }
     
@@ -495,14 +520,16 @@ struct ContentView: View {
     
     private func selectRandomWords(recordHistory: Bool = true) {
         updateTimer()
-        
+
         let selection = fairWordDistribution
             ? generateFairSelection()
             : generateCombinedPoolSelection()
-        
+
         selectedWords = selection.words
         firstSelectedWordSourceCSV = selection.firstSourceCSV
-        
+
+        defer { saveHistoryState() }
+
         guard recordHistory, !selection.words.isEmpty else { return }
         
         if historyIndex >= 0, historyIndex < wordHistory.count - 1 {
@@ -711,11 +738,23 @@ struct ContentView: View {
     private func saveMinLengthExcludedCSVs() {
         minLengthExcludedCSVsData = (try? JSONEncoder().encode(minLengthExcludedCSVs)) ?? Data()
     }
-    
+
+    private func saveHistoryState() {
+        wordHistoryData = (try? JSONEncoder().encode(wordHistory)) ?? Data()
+        savedHistoryIndex = historyIndex
+        savedWordSourceCSV = firstSelectedWordSourceCSV ?? ""
+    }
+
     private func loadPersistedData() {
         selectedCSVs = (try? JSONDecoder().decode(Set<String>.self, from: selectedCSVsData)) ?? []
         csvRanges = (try? JSONDecoder().decode([String: RangePair].self, from: csvRangesData)) ?? [:]
         minLengthExcludedCSVs = (try? JSONDecoder().decode(Set<String>.self, from: minLengthExcludedCSVsData)) ?? []
+
+        wordHistory = (try? JSONDecoder().decode([[String]].self, from: wordHistoryData)) ?? []
+        historyIndex = wordHistory.isEmpty
+            ? -1
+            : min(max(savedHistoryIndex, 0), wordHistory.count - 1)
+        firstSelectedWordSourceCSV = savedWordSourceCSV.isEmpty ? nil : savedWordSourceCSV
     }
     
     private func pauseTimer() {
