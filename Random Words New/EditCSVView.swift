@@ -247,7 +247,7 @@ struct EditCSVView: View {
         applyCurrentSort()
     }
 
-    private func applyCurrentSort() {
+    private func applyCurrentSort(keepVisibleCount: Bool = false) {
         switch sortMode {
         case .original:
             displayedIndices = Array(originalOrder.indices)
@@ -266,7 +266,7 @@ struct EditCSVView: View {
             }
         }
 
-        applySearchAndPagination()
+        applySearchAndPagination(keepVisibleCount: keepVisibleCount)
     }
 
     private func applySearchAndPagination(keepVisibleCount: Bool = false) {
@@ -382,7 +382,7 @@ struct EditCSVView: View {
             }
         }
 
-        applyCurrentSort()
+        applyCurrentSort(keepVisibleCount: true)
         saveCSV()
     }
 
