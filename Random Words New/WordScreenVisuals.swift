@@ -437,9 +437,14 @@ struct CustomiseWordScreenView: View {
                 ColorPicker("Text colour", selection: textColorBinding, supportsOpacity: false)
                 Picker("Word font", selection: $selectedWordFontRaw) {
                     ForEach(availableWordFonts, id: \.self) { fontName in
-                        Text(fontName).tag(fontName)
+                        Text(fontName)
+                            .font(wordDisplayFont(named: fontName, size: 17))
+                            .tag(fontName)
                     }
                 }
+                // The default menu style ignores per-item fonts, so push a list
+                // instead, where each font name renders in its own font.
+                .pickerStyle(.navigationLink)
             }
 
             Section("Background") {
