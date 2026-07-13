@@ -124,7 +124,7 @@ struct DictView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
                     shareSelectedCSVs = Set(orderedCSVFiles)
-                    exportRanges = false
+                    exportRanges = true
                     showingShareOptions = true
                 } label: {
                     Image(systemName: "square.and.arrow.up")
