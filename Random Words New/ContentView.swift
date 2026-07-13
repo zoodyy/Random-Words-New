@@ -527,7 +527,6 @@ struct ContentView: View {
                     selectedThemeRaw: $selectedThemeRaw,
                     minimumWordLength: $minimumWordLength,
                     minLengthExcludedCSVs: $minLengthExcludedCSVs,
-                    selectedWordFontRaw: $selectedWordFontRaw,
                     availableCSVs: availableCSVNames
                 )
             ) {

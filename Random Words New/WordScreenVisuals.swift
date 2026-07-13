@@ -41,6 +41,23 @@ extension Color {
 
 // MARK: - Shared word font
 
+/// The font choices offered for the random words.
+let availableWordFonts: [String] = [
+    "Default",
+    "Slackey",
+    "Avenir Next",
+    "Georgia",
+    "Helvetica Neue",
+    "Futura",
+    "Chalkboard",
+    "Marker Felt",
+    "Palatino",
+    "Gill Sans",
+    "Baskerville",
+    "American Typewriter",
+    "Copperplate"
+]
+
 /// Maps the stored font name to a `Font`, shared between the live word screen
 /// and the settings preview so both render identically.
 func wordDisplayFont(named name: String, size: CGFloat) -> Font {
@@ -276,6 +293,11 @@ struct CustomiseWordScreenView: View {
         Form {
             Section("Words") {
                 ColorPicker("Text colour", selection: textColorBinding, supportsOpacity: false)
+                Picker("Word font", selection: $selectedWordFontRaw) {
+                    ForEach(availableWordFonts, id: \.self) { fontName in
+                        Text(fontName).tag(fontName)
+                    }
+                }
             }
 
             Section("Background") {

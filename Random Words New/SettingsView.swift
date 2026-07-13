@@ -31,27 +31,10 @@ struct SettingsView: View {
     @Binding var selectedThemeRaw: String
     @Binding var minimumWordLength: Int
     @Binding var minLengthExcludedCSVs: Set<String>
-    @Binding var selectedWordFontRaw: String
 
     let availableCSVs: [String]
 
     @AppStorage("orientationLock") private var orientationLockRaw: String = OrientationLock.none.rawValue
-
-    private let availableFonts: [String] = [
-        "Default",
-        "Slackey",
-        "Avenir Next",
-        "Georgia",
-        "Helvetica Neue",
-        "Futura",
-        "Chalkboard",
-        "Marker Felt",
-        "Palatino",
-        "Gill Sans",
-        "Baskerville",
-        "American Typewriter",
-        "Copperplate"
-    ]
 
     var body: some View {
         List {
@@ -154,19 +137,6 @@ struct SettingsView: View {
     private var appearancesSettings: some View {
         ScrollView {
             VStack(spacing: 15) {
-
-                Text("Word Font")
-                    .font(.headline)
-
-                Picker("Word Font", selection: $selectedWordFontRaw) {
-                    ForEach(availableFonts, id: \.self) { fontName in
-                        Text(fontName).tag(fontName)
-                    }
-                }
-                .pickerStyle(.menu)
-                .padding(.horizontal)
-
-                Divider()
 
                 Text("Appearance")
                     .font(.headline)
