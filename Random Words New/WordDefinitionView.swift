@@ -360,6 +360,7 @@ struct WordDefinitionView: View {
 
     @State private var entries: [DictionaryEntry]?
     @State private var currentIndex = 0
+    @State private var showingAddOptions = false
     @State private var showingAddSheet = false
     @State private var showingDeleteAlert = false
     @State private var isDownloading = false
@@ -447,14 +448,6 @@ struct WordDefinitionView: View {
                             Text("No definition found")
                                 .foregroundColor(.gray)
 
-                            if let downloadError {
-                                Text(downloadError)
-                                    .font(.footnote)
-                                    .foregroundColor(.red)
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal, 24)
-                            }
-
                             Button {
                                 downloadDefinitions()
                             } label: {
@@ -483,14 +476,35 @@ struct WordDefinitionView: View {
                             }
                         }
 
-                        Button {
-                            showingAddSheet = true
-                        } label: {
-                            Image(systemName: "plus")
+                        if isDownloading {
+                            ProgressView()
+                        } else {
+                            Button {
+                                showingAddOptions = true
+                            } label: {
+                                Image(systemName: "plus")
+                            }
                         }
                     }
                 }
             }
+        }
+        .confirmationDialog("Add Definition", isPresented: $showingAddOptions, titleVisibility: .visible) {
+            Button("Write your own") {
+                showingAddSheet = true
+            }
+            Button("Download from the internet") {
+                downloadDefinitions()
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Download Failed", isPresented: Binding(
+            get: { downloadError != nil },
+            set: { if !$0 { downloadError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(downloadError ?? "")
         }
         .sheet(isPresented: $showingAddSheet) {
             AddDefinitionView(word: word) { wordType, definition in
@@ -540,7 +554,7 @@ struct WordDefinitionView: View {
             do {
                 let updated = try await EnglishDictionaryStore.shared.downloadDefinitions(for: word)
                 entries = updated
-                currentIndex = 0
+                currentIndex = updated.firstIndex { $0.source == .downloaded } ?? 0
             } catch DefinitionDownloadError.notFound {
                 downloadError = "No definitions found online for \"\(word)\"."
             } catch {
