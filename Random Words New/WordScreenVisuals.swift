@@ -107,7 +107,7 @@ enum TimerIndicatorStyle: String, CaseIterable, Identifiable {
     var positions: [TimerIndicatorPosition] {
         switch self {
         case .dontShow:       return []
-        case .horizontalLine: return [.top, .bottom]
+        case .horizontalLine: return [.top, .bottom, .underline]
         case .verticalLine:   return [.left, .right]
         case .circle, .seconds:
             return [.topLeft, .topRight, .bottomLeft, .bottomRight]
@@ -134,13 +134,14 @@ enum TimerIndicatorPosition: String, CaseIterable, Identifiable {
     case topRight    = "Top right"
     case bottomLeft  = "Bottom left"
     case bottomRight = "Bottom right"
+    case underline   = "Underlining word"
 
     var id: String { rawValue }
 
     var alignment: Alignment {
         switch self {
         case .top:         return .top
-        case .bottom:      return .bottom
+        case .bottom, .underline: return .bottom
         case .left:        return .leading
         case .right:       return .trailing
         case .topLeft:     return .topLeading
@@ -212,10 +213,16 @@ struct TimerIndicatorView: View {
                 case .dontShow:
                     EmptyView()
                 case .horizontalLine:
-                    Capsule()
-                        .fill(color)
-                        .frame(width: max(0, geo.size.width * progress), height: 5)
-                        .padding(.vertical, 6)
+                    // The underline placement tracks the word itself and is drawn
+                    // attached to the word text via `timerUnderline`, not here.
+                    if position == .underline {
+                        EmptyView()
+                    } else {
+                        Capsule()
+                            .fill(color)
+                            .frame(width: max(0, geo.size.width * progress), height: 5)
+                            .padding(.vertical, 6)
+                    }
                 case .verticalLine:
                     Capsule()
                         .fill(color)
@@ -238,6 +245,28 @@ struct TimerIndicatorView: View {
             .frame(width: geo.size.width, height: geo.size.height, alignment: position.alignment)
         }
         .allowsHitTesting(false)
+    }
+}
+
+extension View {
+    /// The "Underlining word" placement of the horizontal-line indicator: a line
+    /// hugging this word text's width, drawn just beneath it, shrinking towards
+    /// its centre as the next word approaches. Attached to the word rather than
+    /// the screen so it exactly underlines the word wherever it sits.
+    func timerUnderline(active: Bool, color: Color, nextWordDate: Date?, interval: Double) -> some View {
+        overlay(alignment: .bottom) {
+            if active, let nextWordDate, interval > 0 {
+                TimelineView(.animation) { timeline in
+                    let remaining = max(0, nextWordDate.timeIntervalSince(timeline.date))
+                    Capsule()
+                        .fill(color)
+                        .frame(height: 5)
+                        .scaleEffect(x: max(0, min(1, remaining / interval)), anchor: .center)
+                        .offset(y: 10)
+                }
+                .allowsHitTesting(false)
+            }
+        }
     }
 }
 
@@ -273,6 +302,16 @@ struct CustomiseWordScreenView: View {
 
     private var selectedStyle: TimerIndicatorStyle {
         TimerIndicatorStyle(rawValue: timerStyle) ?? .dontShow
+    }
+
+    private var selectedPosition: TimerIndicatorPosition {
+        TimerIndicatorPosition(rawValue: timerPosition) ?? selectedStyle.defaultPosition
+    }
+
+    /// The underline placement is drawn attached to the word, not via the
+    /// full-screen indicator overlay.
+    private var isUnderlineSelected: Bool {
+        selectedStyle == .horizontalLine && selectedPosition == .underline
     }
 
     var body: some View {
@@ -370,7 +409,7 @@ struct CustomiseWordScreenView: View {
             .offset(y: -topCrop)
             .frame(width: width, height: visibleHeight, alignment: .top)
             .overlay {
-                if selectedStyle != .dontShow {
+                if selectedStyle != .dontShow, !isUnderlineSelected {
                     indicatorOverlay(circleScale: 1 - 0.35 * collapseFraction)
                 }
             }
@@ -387,6 +426,7 @@ struct CustomiseWordScreenView: View {
         TimelineView(.animation) { timeline in
             let elapsed = max(0, timeline.date.timeIntervalSince(start))
             let cycle = Int(elapsed / Self.demoInterval)
+            let remaining = Self.demoInterval - elapsed.truncatingRemainder(dividingBy: Self.demoInterval)
             let word = Self.demoWords[cycle % Self.demoWords.count]
 
             ZStack {
@@ -398,6 +438,11 @@ struct CustomiseWordScreenView: View {
                     .foregroundColor(WordScreenStyle.resolvedTextColor(textColor))
                     .lineLimit(1)
                     .minimumScaleFactor(0.2)
+                    .timerUnderline(
+                        active: isUnderlineSelected,
+                        color: WordScreenStyle.resolvedTimerColor(timerColor, textColor: textColor),
+                        nextWordDate: timeline.date.addingTimeInterval(remaining),
+                        interval: Self.demoInterval)
                     // Leave room next to the word when a line runs down an edge.
                     .padding(.horizontal, selectedStyle == .verticalLine ? 28 : 12)
             }

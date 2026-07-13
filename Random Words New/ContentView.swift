@@ -291,6 +291,11 @@ struct ContentView: View {
                                             .multilineTextAlignment(.center)
                                     }
                                 }
+                                .timerUnderline(
+                                    active: isUnderlineIndicator,
+                                    color: timerIndicatorColor,
+                                    nextWordDate: nextWordDate,
+                                    interval: switchInterval)
                                 .frame(
                                     width: geo.size.width,
                                     height: geo.size.height / CGFloat(selectedWords.count)
@@ -358,20 +363,37 @@ struct ContentView: View {
         totalEligibleWordCount > 0
     }
 
+    private var timerIndicatorStyle: TimerIndicatorStyle {
+        TimerIndicatorStyle(rawValue: timerIndicatorStyleRaw) ?? .dontShow
+    }
+
+    private var timerIndicatorPosition: TimerIndicatorPosition {
+        TimerIndicatorPosition(rawValue: timerIndicatorPositionRaw)
+            ?? timerIndicatorStyle.defaultPosition
+    }
+
+    /// The underline placement tracks the word itself, so it's drawn attached to
+    /// each word rather than by the full-screen indicator overlay.
+    private var isUnderlineIndicator: Bool {
+        timerIndicatorStyle == .horizontalLine && timerIndicatorPosition == .underline
+    }
+
+    private var timerIndicatorColor: Color {
+        WordScreenStyle.resolvedTimerColor(timerIndicatorColorRaw, textColor: wordTextColorRaw)
+    }
+
     /// The "time until next word" indicator chosen in Appearances → Customise
     /// Random Word Screen. Only shown while the automatic timer is running.
     @ViewBuilder
     private var timerIndicatorOverlay: some View {
-        let style = TimerIndicatorStyle(rawValue: timerIndicatorStyleRaw) ?? .dontShow
-        if style != .dontShow, switchInterval > 0, let nextWordDate {
+        if timerIndicatorStyle != .dontShow, !isUnderlineIndicator,
+           switchInterval > 0, let nextWordDate {
             TimelineView(.animation) { timeline in
                 let remaining = max(0, nextWordDate.timeIntervalSince(timeline.date))
                 TimerIndicatorView(
-                    style: style,
-                    position: TimerIndicatorPosition(rawValue: timerIndicatorPositionRaw)
-                        ?? style.defaultPosition,
-                    color: WordScreenStyle.resolvedTimerColor(
-                        timerIndicatorColorRaw, textColor: wordTextColorRaw),
+                    style: timerIndicatorStyle,
+                    position: timerIndicatorPosition,
+                    color: timerIndicatorColor,
                     progress: remaining / switchInterval,
                     secondsRemaining: Int(remaining.rounded(.up)))
             }
