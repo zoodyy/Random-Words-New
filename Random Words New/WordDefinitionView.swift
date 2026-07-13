@@ -360,7 +360,6 @@ struct WordDefinitionView: View {
 
     @State private var entries: [DictionaryEntry]?
     @State private var currentIndex = 0
-    @State private var showingAddOptions = false
     @State private var showingAddSheet = false
     @State private var showingDeleteAlert = false
     @State private var isDownloading = false
@@ -491,6 +490,18 @@ struct WordDefinitionView: View {
                     }
             )
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if isDownloading {
+                        ProgressView()
+                    } else {
+                        Button {
+                            downloadDefinitions()
+                        } label: {
+                            Image(systemName: "arrow.down.circle")
+                        }
+                    }
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 16) {
                         if currentEntry?.isDeletable == true {
@@ -501,27 +512,14 @@ struct WordDefinitionView: View {
                             }
                         }
 
-                        if isDownloading {
-                            ProgressView()
-                        } else {
-                            Button {
-                                showingAddOptions = true
-                            } label: {
-                                Image(systemName: "plus")
-                            }
+                        Button {
+                            showingAddSheet = true
+                        } label: {
+                            Image(systemName: "plus")
                         }
                     }
                 }
             }
-        }
-        .confirmationDialog("Add Definition", isPresented: $showingAddOptions, titleVisibility: .visible) {
-            Button("Write your own") {
-                showingAddSheet = true
-            }
-            Button("Download from the internet") {
-                downloadDefinitions()
-            }
-            Button("Cancel", role: .cancel) {}
         }
         .alert("Download Failed", isPresented: Binding(
             get: { downloadError != nil },
