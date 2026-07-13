@@ -70,7 +70,7 @@ struct SettingsView: View {
             Section {
                 Toggle("Automatically Download Word Definitions", isOn: $autoDownloadWordDefinitions)
             } footer: {
-                Text("When you open a word's definitions, additional definitions are downloaded from the internet automatically. The manual download button is hidden unless a download fails.")
+                Text("When you open a word's definitions, additional definitions (usually better ones) are downloaded from the internet automatically. The manual download button is hidden unless a download fails.")
             }
         }
         .navigationTitle("Dictionary")
