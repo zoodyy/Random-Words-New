@@ -452,7 +452,7 @@ struct CustomiseWordScreenView: View {
             }
 
             Section {
-                Picker("Show time until next word", selection: $timerStyle) {
+                Picker("Timeline", selection: $timerStyle) {
                     ForEach(TimerIndicatorStyle.allCases) { style in
                         Text(style.rawValue).tag(style.rawValue)
                     }
