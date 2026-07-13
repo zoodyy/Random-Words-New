@@ -51,7 +51,13 @@ struct ContentView: View {
     @AppStorage("selectedTheme") private var selectedThemeRaw: String = AppTheme.system.rawValue
     @AppStorage("minimumWordLength") private var minimumWordLength: Int = 1
     @AppStorage("selectedWordFont") private var selectedWordFontRaw: String = "American Typewriter"
-    
+
+    @AppStorage(WordVisualKeys.textColor) private var wordTextColorRaw: String = WordVisualDefaults.textColor
+    @AppStorage(WordVisualKeys.backgroundColor) private var wordBackgroundColorRaw: String = WordVisualDefaults.backgroundColor
+    @AppStorage(WordVisualKeys.timerStyle) private var timerIndicatorStyleRaw: String = WordVisualDefaults.timerStyle
+    @AppStorage(WordVisualKeys.timerPosition) private var timerIndicatorPositionRaw: String = WordVisualDefaults.timerPosition
+    @AppStorage(WordVisualKeys.timerColor) private var timerIndicatorColorRaw: String = WordVisualDefaults.timerColor
+
     @AppStorage("selectedCSVsData") private var selectedCSVsData: Data = Data()
     @AppStorage("csvRangesData") private var csvRangesData: Data = Data()
     @AppStorage("minLengthExcludedCSVsData") private var minLengthExcludedCSVsData: Data = Data()
@@ -63,6 +69,7 @@ struct ContentView: View {
     @State private var csvRanges: [String: RangePair] = [:]
     @State private var selectedWords: [String] = []
     @State private var timer: Timer?
+    @State private var nextWordDate: Date?
     @State private var sliderChangeTrigger = 0
     @State private var allWordsPerCSV: [String: [String]] = [:]
     @State private var minLengthExcludedCSVs: Set<String> = []
@@ -144,34 +151,7 @@ struct ContentView: View {
     }
     
     private func wordFont(size: CGFloat) -> Font {
-        switch selectedWordFontRaw {
-        case "Slackey":
-            return .custom("Slackey", size: size)
-        case "Avenir Next":
-            return .custom("AvenirNext-Regular", size: size)
-        case "Georgia":
-            return .custom("Georgia", size: size)
-        case "Helvetica Neue":
-            return .custom("HelveticaNeue", size: size)
-        case "Futura":
-            return .custom("Futura-Medium", size: size)
-        case "Chalkboard":
-            return .custom("ChalkboardSE-Regular", size: size)
-        case "Marker Felt":
-            return .custom("MarkerFelt-Wide", size: size)
-        case "Palatino":
-            return .custom("Palatino-Roman", size: size)
-        case "Gill Sans":
-            return .custom("GillSans", size: size)
-        case "Baskerville":
-            return .custom("Baskerville", size: size)
-        case "American Typewriter":
-            return .custom("AmericanTypewriter", size: size)
-        case "Copperplate":
-            return .custom("Copperplate", size: size)
-        default:
-            return .system(size: size)
-        }
+        wordDisplayFont(named: selectedWordFontRaw, size: size)
     }
     
     var body: some View {
@@ -266,8 +246,9 @@ struct ContentView: View {
     
     private func mainContent() -> some View {
         ZStack {
-            Color.clear.ignoresSafeArea()
-            
+            WordScreenStyle.resolvedBackground(wordBackgroundColorRaw)
+                .ignoresSafeArea()
+
             VStack {
                 Spacer()
                 
@@ -362,6 +343,8 @@ struct ContentView: View {
                 Spacer()
             }
             .allowsHitTesting(false)
+
+            timerIndicatorOverlay
         }
         .contentShape(Rectangle())
         .gesture(swipeGesture)
@@ -373,6 +356,26 @@ struct ContentView: View {
     
     private var hasAvailableWords: Bool {
         totalEligibleWordCount > 0
+    }
+
+    /// The "time until next word" indicator chosen in Appearances → Customise
+    /// Random Word Screen. Only shown while the automatic timer is running.
+    @ViewBuilder
+    private var timerIndicatorOverlay: some View {
+        let style = TimerIndicatorStyle(rawValue: timerIndicatorStyleRaw) ?? .dontShow
+        if style != .dontShow, switchInterval > 0, let nextWordDate {
+            TimelineView(.animation) { timeline in
+                let remaining = max(0, nextWordDate.timeIntervalSince(timeline.date))
+                TimerIndicatorView(
+                    style: style,
+                    position: TimerIndicatorPosition(rawValue: timerIndicatorPositionRaw)
+                        ?? style.defaultPosition,
+                    color: Color(hex: timerIndicatorColorRaw),
+                    progress: remaining / switchInterval,
+                    secondsRemaining: Int(remaining.rounded(.up)))
+            }
+            .allowsHitTesting(false)
+        }
     }
     
     private func needsWrapping(text: String, baseFontSize: CGFloat, availableWidth: CGFloat, minScale: CGFloat) -> Bool {
@@ -754,8 +757,10 @@ struct ContentView: View {
     private func updateTimer() {
         timer?.invalidate()
         timer = nil
+        nextWordDate = nil
         guard switchInterval > 0, isScreenVisible else { return }
-        
+
+        nextWordDate = Date().addingTimeInterval(switchInterval)
         timer = Timer.scheduledTimer(withTimeInterval: switchInterval, repeats: true) { _ in
             selectRandomWords(recordHistory: true)
         }
@@ -795,6 +800,7 @@ struct ContentView: View {
         if switchInterval > 0 {
             timer?.invalidate()
             timer = nil
+            nextWordDate = nil
         }
     }
 
@@ -805,6 +811,12 @@ struct ContentView: View {
     }
     
     private var getTextColor: Color {
-        timer == nil ? Color.gray : Color.primary
+        // No custom colour picked: keep the original grey-when-paused look.
+        // With a custom colour, dim it while paused so the pause state stays visible.
+        if wordTextColorRaw.isEmpty {
+            return timer == nil ? Color.gray : Color.primary
+        }
+        let custom = Color(hex: wordTextColorRaw)
+        return timer == nil ? custom.opacity(0.5) : custom
     }
 }

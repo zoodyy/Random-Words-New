@@ -194,6 +194,22 @@ struct SettingsView: View {
                 .onChange(of: orientationLockRaw) {
                     (OrientationLock(rawValue: orientationLockRaw) ?? .none).apply()
                 }
+
+                Divider()
+
+                NavigationLink {
+                    CustomiseWordScreenView()
+                } label: {
+                    HStack {
+                        Label("Customise Random Word Screen", systemImage: "paintpalette")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal)
+                }
+                .foregroundStyle(.primary)
             }
             .padding()
         }
