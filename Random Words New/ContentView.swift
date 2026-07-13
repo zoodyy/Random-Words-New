@@ -83,6 +83,9 @@ struct ContentView: View {
     @State private var wordHistory: [[String]] = []
     @State private var historyIndex: Int = -1
 
+    @State private var toastMessage: String?
+    @State private var toastID = 0
+
     @State private var hasLoadedOnce = false
     @State private var isScreenVisible = false
     @State private var wasTimerRunningBeforeDisappear = false
@@ -328,6 +331,7 @@ struct ContentView: View {
                                             resumeTimer()
                                             
                                             UIPasteboard.general.string = word
+                                            showToast("Copied")
                                             let generator = UIImpactFeedbackGenerator(style: .medium)
                                             generator.impactOccurred()
                                         }
@@ -346,6 +350,18 @@ struct ContentView: View {
                     .foregroundColor(.gray)
                     .padding(.bottom, 40)
             }
+
+            VStack {
+                if let toastMessage {
+                    Text(toastMessage)
+                        .font(.footnote)
+                        .foregroundColor(.gray)
+                        .padding(.top, 8)
+                        .transition(.opacity)
+                }
+                Spacer()
+            }
+            .allowsHitTesting(false)
         }
         .contentShape(Rectangle())
         .gesture(swipeGesture)
@@ -384,6 +400,23 @@ struct ContentView: View {
         word.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
     }
     
+    private func showToast(_ message: String) {
+        toastID += 1
+        let currentID = toastID
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            toastMessage = message
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            // Only hide if no newer toast has replaced this one.
+            guard toastID == currentID else { return }
+            withAnimation(.easeInOut(duration: 0.3)) {
+                toastMessage = nil
+            }
+        }
+    }
+
     private func handleLeftSwipe() {
         pauseTimer()
         guard !selectedWords.isEmpty else { return }
@@ -394,6 +427,7 @@ struct ContentView: View {
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             addToOwnVocab(selectedWords)
+            showToast(selectedWords.count == 1 ? "Added word to ownVocab" : "Added words to ownVocab")
             selectRandomWords(recordHistory: true)
             swipeOffset = 0
         }
