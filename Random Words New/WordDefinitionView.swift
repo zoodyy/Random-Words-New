@@ -1,10 +1,20 @@
 import SwiftUI
 
+nonisolated enum DefinitionSource: Sendable {
+    case user
+    case downloaded
+    case bundled
+}
+
 nonisolated struct DictionaryEntry: Identifiable, Sendable {
     let id = UUID()
     let wordType: String
     let definition: String
-    let isUserMade: Bool
+    let source: DefinitionSource
+
+    var isDeletable: Bool {
+        source != .bundled
+    }
 }
 
 struct DefinitionTarget: Identifiable {
@@ -12,17 +22,26 @@ struct DefinitionTarget: Identifiable {
     var id: String { word }
 }
 
+nonisolated enum DefinitionDownloadError: Error {
+    case notFound
+    case badResponse
+}
+
 actor EnglishDictionaryStore {
     static let shared = EnglishDictionaryStore()
 
     private var bundledIndex: [String: [DictionaryEntry]]?
     private var userDefinitions: [(word: String, entry: DictionaryEntry)]?
+    private var downloadedDefinitions: [(word: String, entry: DictionaryEntry)]?
 
     func definitions(for word: String) -> [DictionaryEntry] {
         let key = word.lowercased()
 
         if userDefinitions == nil {
-            userDefinitions = Self.loadUserDefinitions()
+            userDefinitions = Self.loadDefinitionsFile(at: Self.userDefinitionsURL, source: .user)
+        }
+        if downloadedDefinitions == nil {
+            downloadedDefinitions = Self.loadDefinitionsFile(at: Self.downloadedDefinitionsURL, source: .downloaded)
         }
         if bundledIndex == nil {
             bundledIndex = Self.buildBundledIndex()
@@ -32,36 +51,124 @@ actor EnglishDictionaryStore {
             .filter { $0.word.lowercased() == key }
             .map { $0.entry }
 
-        return userEntries + (bundledIndex?[key] ?? [])
+        let downloadedEntries = (downloadedDefinitions ?? [])
+            .filter { $0.word.lowercased() == key }
+            .map { $0.entry }
+
+        return userEntries + downloadedEntries + (bundledIndex?[key] ?? [])
     }
 
     func addUserDefinition(word: String, wordType: String, definition: String) -> (entries: [DictionaryEntry], newIndex: Int) {
-        var definitions = userDefinitions ?? Self.loadUserDefinitions()
+        var definitions = userDefinitions ?? Self.loadDefinitionsFile(at: Self.userDefinitionsURL, source: .user)
 
         let entry = DictionaryEntry(
             wordType: wordType.trimmingCharacters(in: .whitespacesAndNewlines),
             definition: definition.trimmingCharacters(in: .whitespacesAndNewlines),
-            isUserMade: true
+            source: .user
         )
         definitions.append((word, entry))
         userDefinitions = definitions
-        saveUserDefinitions()
+        Self.saveDefinitionsFile(definitions, at: Self.userDefinitionsURL)
 
         let entries = self.definitions(for: word)
         let newIndex = entries.firstIndex { $0.id == entry.id } ?? 0
         return (entries, newIndex)
     }
 
-    func deleteUserDefinition(id: UUID, word: String) -> [DictionaryEntry] {
-        var definitions = userDefinitions ?? Self.loadUserDefinitions()
-        definitions.removeAll { $0.entry.id == id }
-        userDefinitions = definitions
-        saveUserDefinitions()
+    func deleteDefinition(id: UUID, word: String) -> [DictionaryEntry] {
+        var user = userDefinitions ?? Self.loadDefinitionsFile(at: Self.userDefinitionsURL, source: .user)
+        var downloaded = downloadedDefinitions ?? Self.loadDefinitionsFile(at: Self.downloadedDefinitionsURL, source: .downloaded)
 
-        return self.definitions(for: word)
+        if user.contains(where: { $0.entry.id == id }) {
+            user.removeAll { $0.entry.id == id }
+            userDefinitions = user
+            Self.saveDefinitionsFile(user, at: Self.userDefinitionsURL)
+        } else if downloaded.contains(where: { $0.entry.id == id }) {
+            downloaded.removeAll { $0.entry.id == id }
+            downloadedDefinitions = downloaded
+            Self.saveDefinitionsFile(downloaded, at: Self.downloadedDefinitionsURL)
+        }
+
+        return definitions(for: word)
     }
 
-    // MARK: - User definitions persistence
+    // MARK: - Downloading definitions
+
+    private struct APIEntry: Decodable {
+        struct Meaning: Decodable {
+            struct APIDefinition: Decodable {
+                let definition: String
+            }
+            let partOfSpeech: String?
+            let definitions: [APIDefinition]
+        }
+        let meanings: [Meaning]
+    }
+
+    func downloadDefinitions(for word: String) async throws -> [DictionaryEntry] {
+        guard let encodedWord = word.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://api.dictionaryapi.dev/api/v2/entries/en/\(encodedWord)") else {
+            throw DefinitionDownloadError.notFound
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw DefinitionDownloadError.badResponse
+        }
+        if httpResponse.statusCode == 404 {
+            throw DefinitionDownloadError.notFound
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw DefinitionDownloadError.badResponse
+        }
+
+        let apiEntries = try JSONDecoder().decode([APIEntry].self, from: data)
+
+        var newDefinitions: [(word: String, entry: DictionaryEntry)] = []
+        for apiEntry in apiEntries {
+            for meaning in apiEntry.meanings {
+                let wordType = Self.abbreviatedWordType(meaning.partOfSpeech ?? "")
+                for apiDefinition in meaning.definitions {
+                    let text = apiDefinition.definition.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !text.isEmpty else { continue }
+                    newDefinitions.append((word, DictionaryEntry(
+                        wordType: wordType,
+                        definition: text,
+                        source: .downloaded
+                    )))
+                }
+            }
+        }
+
+        guard !newDefinitions.isEmpty else {
+            throw DefinitionDownloadError.notFound
+        }
+
+        var downloaded = downloadedDefinitions ?? Self.loadDefinitionsFile(at: Self.downloadedDefinitionsURL, source: .downloaded)
+        downloaded.removeAll { $0.word.lowercased() == word.lowercased() }
+        downloaded.append(contentsOf: newDefinitions)
+        downloadedDefinitions = downloaded
+        Self.saveDefinitionsFile(downloaded, at: Self.downloadedDefinitionsURL)
+
+        return definitions(for: word)
+    }
+
+    private nonisolated static func abbreviatedWordType(_ partOfSpeech: String) -> String {
+        switch partOfSpeech.lowercased() {
+        case "noun": return "n."
+        case "verb": return "v."
+        case "adjective": return "a."
+        case "adverb": return "adv."
+        case "pronoun": return "pron."
+        case "preposition": return "prep."
+        case "conjunction": return "conj."
+        case "interjection", "exclamation": return "interj."
+        default: return partOfSpeech
+        }
+    }
+
+    // MARK: - Editable definitions persistence
 
     private nonisolated static var userDefinitionsURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -69,8 +176,18 @@ actor EnglishDictionaryStore {
             .appendingPathComponent("userDefinitions.csv")
     }
 
-    private nonisolated static func loadUserDefinitions() -> [(word: String, entry: DictionaryEntry)] {
-        guard let data = try? Data(contentsOf: userDefinitionsURL) else { return [] }
+    // The app bundle is read-only at runtime, so "Downloads" lives in the
+    // Documents folder, mirroring the bundled Dictionaries/English layout.
+    private nonisolated static var downloadedDefinitionsURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Downloads", isDirectory: true)
+            .appendingPathComponent("Dictionaries", isDirectory: true)
+            .appendingPathComponent("English", isDirectory: true)
+            .appendingPathComponent("downloadedDefinitions.csv")
+    }
+
+    private nonisolated static func loadDefinitionsFile(at url: URL, source: DefinitionSource) -> [(word: String, entry: DictionaryEntry)] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
 
         var definitions: [(word: String, entry: DictionaryEntry)] = []
 
@@ -88,7 +205,7 @@ actor EnglishDictionaryStore {
             let entry = DictionaryEntry(
                 wordType: fields[1].trimmingCharacters(in: .whitespaces),
                 definition: definition,
-                isUserMade: true
+                source: source
             )
             definitions.append((word, entry))
         }
@@ -96,19 +213,16 @@ actor EnglishDictionaryStore {
         return definitions
     }
 
-    private func saveUserDefinitions() {
-        guard let userDefinitions else { return }
-
+    private nonisolated static func saveDefinitionsFile(_ definitions: [(word: String, entry: DictionaryEntry)], at url: URL) {
         var lines = ["word,pos,definition"]
-        for (word, entry) in userDefinitions {
+        for (word, entry) in definitions {
             lines.append([
-                Self.csvField(word),
-                Self.csvField(entry.wordType),
-                Self.csvField(entry.definition)
+                csvField(word),
+                csvField(entry.wordType),
+                csvField(entry.definition)
             ].joined(separator: ","))
         }
 
-        let url = Self.userDefinitionsURL
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -145,7 +259,7 @@ actor EnglishDictionaryStore {
                 let entry = DictionaryEntry(
                     wordType: fields[1].trimmingCharacters(in: .whitespaces),
                     definition: definition,
-                    isUserMade: false
+                    source: .bundled
                 )
                 index[word.lowercased(), default: []].append(entry)
             }
@@ -248,10 +362,20 @@ struct WordDefinitionView: View {
     @State private var currentIndex = 0
     @State private var showingAddSheet = false
     @State private var showingDeleteAlert = false
+    @State private var isDownloading = false
+    @State private var downloadError: String?
 
     private var currentEntry: DictionaryEntry? {
         guard let entries, !entries.isEmpty else { return nil }
         return entries[min(currentIndex, entries.count - 1)]
+    }
+
+    private func sourceBadge(for entry: DictionaryEntry) -> String? {
+        switch entry.source {
+        case .user: return "Your definition"
+        case .downloaded: return "Downloaded"
+        case .bundled: return nil
+        }
     }
 
     var body: some View {
@@ -265,8 +389,8 @@ struct WordDefinitionView: View {
 
                 if let entries {
                     if let entry = currentEntry {
-                        if entry.isUserMade {
-                            Text("Your definition")
+                        if let badge = sourceBadge(for: entry) {
+                            Text(badge)
                                 .font(.caption)
                                 .foregroundColor(.accentColor)
                                 .padding(.horizontal, 8)
@@ -316,8 +440,29 @@ struct WordDefinitionView: View {
                         }
                     } else {
                         Spacer()
-                        Text("No definition found")
-                            .foregroundColor(.gray)
+
+                        if isDownloading {
+                            ProgressView("Downloading definitions…")
+                        } else {
+                            Text("No definition found")
+                                .foregroundColor(.gray)
+
+                            if let downloadError {
+                                Text(downloadError)
+                                    .font(.footnote)
+                                    .foregroundColor(.red)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 24)
+                            }
+
+                            Button {
+                                downloadDefinitions()
+                            } label: {
+                                Label("Download definitions", systemImage: "arrow.down.circle")
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+
                         Spacer()
                     }
                 } else {
@@ -330,7 +475,7 @@ struct WordDefinitionView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 16) {
-                        if currentEntry?.isUserMade == true {
+                        if currentEntry?.isDeletable == true {
                             Button(role: .destructive) {
                                 showingDeleteAlert = true
                             } label: {
@@ -378,12 +523,30 @@ struct WordDefinitionView: View {
     }
 
     private func deleteCurrentDefinition() {
-        guard let entry = currentEntry, entry.isUserMade else { return }
+        guard let entry = currentEntry, entry.isDeletable else { return }
 
         Task {
-            let updated = await EnglishDictionaryStore.shared.deleteUserDefinition(id: entry.id, word: word)
+            let updated = await EnglishDictionaryStore.shared.deleteDefinition(id: entry.id, word: word)
             entries = updated
             currentIndex = min(currentIndex, max(updated.count - 1, 0))
+        }
+    }
+
+    private func downloadDefinitions() {
+        isDownloading = true
+        downloadError = nil
+
+        Task {
+            do {
+                let updated = try await EnglishDictionaryStore.shared.downloadDefinitions(for: word)
+                entries = updated
+                currentIndex = 0
+            } catch DefinitionDownloadError.notFound {
+                downloadError = "No definitions found online for \"\(word)\"."
+            } catch {
+                downloadError = "Download failed. Check your internet connection."
+            }
+            isDownloading = false
         }
     }
 }
