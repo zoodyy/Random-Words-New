@@ -79,6 +79,10 @@ struct ContentView: View {
     
     @State private var wordHistory: [[String]] = []
     @State private var historyIndex: Int = -1
+
+    @State private var hasLoadedOnce = false
+    @State private var isScreenVisible = false
+    @State private var wasTimerRunningBeforeDisappear = false
     
     private let maxHistoryCount: Int = 100
     
@@ -179,8 +183,28 @@ struct ContentView: View {
                     WordDefinitionView(word: target.word)
                 }
                 .onAppear {
-                    loadPersistedData()
-                    loadCSVs()
+                    isScreenVisible = true
+                    if hasLoadedOnce {
+                        // Returning from another screen: refresh CSV contents
+                        // (they may have been edited) but keep the displayed
+                        // word and the swipe history intact.
+                        reloadCSVContents()
+                        if selectedWords.isEmpty {
+                            selectRandomWords(recordHistory: true)
+                        }
+                        if wasTimerRunningBeforeDisappear {
+                            resumeTimer()
+                        }
+                    } else {
+                        hasLoadedOnce = true
+                        loadPersistedData()
+                        loadCSVs()
+                    }
+                }
+                .onDisappear {
+                    wasTimerRunningBeforeDisappear = timer != nil
+                    isScreenVisible = false
+                    pauseTimer()
                 }
                 .onChange(of: selectedCSVs) { _ in
                     saveCSVs()
@@ -572,6 +596,16 @@ struct ContentView: View {
     }
     
     private func loadCSVs() {
+        reloadCSVContents()
+
+        wordHistory.removeAll()
+        historyIndex = -1
+
+        selectRandomWords(recordHistory: true)
+        updateTimer()
+    }
+
+    private func reloadCSVContents() {
         allWordsPerCSV.removeAll()
         
         for csv in selectedCSVs {
@@ -595,14 +629,8 @@ struct ContentView: View {
                 allWordsPerCSV[csv] = lines
             }
         }
-        
+
         rebuildWordPools()
-        
-        wordHistory.removeAll()
-        historyIndex = -1
-        
-        selectRandomWords(recordHistory: true)
-        updateTimer()
     }
     
     private func rebuildWordPools() {
@@ -664,7 +692,8 @@ struct ContentView: View {
     
     private func updateTimer() {
         timer?.invalidate()
-        guard switchInterval > 0 else { return }
+        timer = nil
+        guard switchInterval > 0, isScreenVisible else { return }
         
         timer = Timer.scheduledTimer(withTimeInterval: switchInterval, repeats: true) { _ in
             selectRandomWords(recordHistory: true)
