@@ -399,15 +399,6 @@ struct WordDefinitionView: View {
 
                 if let entries {
                     if let entry = currentEntry {
-                        if let badge = sourceBadge(for: entry) {
-                            Text(badge)
-                                .font(.caption)
-                                .foregroundColor(.accentColor)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Color.accentColor.opacity(0.12), in: Capsule())
-                        }
-
                         if !entry.wordType.isEmpty {
                             Text(entry.wordType)
                                 .font(.title3)
@@ -423,6 +414,16 @@ struct WordDefinitionView: View {
                                 .padding(.bottom, 16)
                         }
                         .scrollBounceBehavior(.basedOnSize)
+
+                        if let badge = sourceBadge(for: entry) {
+                            Text(badge)
+                                .font(.caption)
+                                .foregroundColor(.accentColor)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.accentColor.opacity(0.12), in: Capsule())
+                                .padding(.bottom, entries.count > 1 ? 0 : 24)
+                        }
 
                         if entries.count > 1 {
                             HStack(spacing: 24) {
