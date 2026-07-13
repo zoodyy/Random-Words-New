@@ -8,8 +8,23 @@
 import SwiftUI
 import SwiftData
 
+class AppDelegate: NSObject, UIApplicationDelegate {
+    static var orientationLock: UIInterfaceOrientationMask = .all
+
+    func application(
+        _ application: UIApplication,
+        supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
+        AppDelegate.orientationLock
+    }
+}
+
 @main
 struct Random_Words_NewApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    @AppStorage("orientationLock") private var orientationLockRaw: String = OrientationLock.none.rawValue
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Item.self,
@@ -26,6 +41,9 @@ struct Random_Words_NewApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onAppear {
+                    (OrientationLock(rawValue: orientationLockRaw) ?? .none).apply()
+                }
         }
         .modelContainer(sharedModelContainer)
     }

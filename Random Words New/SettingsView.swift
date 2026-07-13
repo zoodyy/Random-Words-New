@@ -1,7 +1,30 @@
 import SwiftUI
 
+enum OrientationLock: String, CaseIterable {
+    case portrait = "Portrait"
+    case landscape = "Landscape"
+    case none = "Don't Lock"
+
+    var mask: UIInterfaceOrientationMask {
+        switch self {
+        case .portrait: return .portrait
+        case .landscape: return .landscape
+        case .none: return .all
+        }
+    }
+
+    func apply() {
+        AppDelegate.orientationLock = mask
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first else { return }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
+        scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+    }
+}
+
 struct SettingsView: View {
-    
+
     @Binding var switchInterval: Double
     @Binding var numberOfWordsToShow: Int
     @Binding var fairWordDistribution: Bool
@@ -9,9 +32,11 @@ struct SettingsView: View {
     @Binding var minimumWordLength: Int
     @Binding var minLengthExcludedCSVs: Set<String>
     @Binding var selectedWordFontRaw: String
-    
+
     let availableCSVs: [String]
-    
+
+    @AppStorage("orientationLock") private var orientationLockRaw: String = OrientationLock.none.rawValue
+
     private let availableFonts: [String] = [
         "Default",
         "Slackey",
@@ -27,24 +52,41 @@ struct SettingsView: View {
         "American Typewriter",
         "Copperplate"
     ]
-    
+
     var body: some View {
+        List {
+            NavigationLink {
+                randomWordsSettings
+            } label: {
+                Label("Random Words", systemImage: "textformat.abc")
+            }
+
+            NavigationLink {
+                appearancesSettings
+            } label: {
+                Label("Appearances", systemImage: "paintbrush")
+            }
+        }
+        .navigationTitle("Settings")
+    }
+
+    private var randomWordsSettings: some View {
         ScrollView {
             VStack(spacing: 15) {
-                
+
                 Text(switchInterval == 0
                      ? "Manual Mode"
                      : "Switch every \(Int(switchInterval)) sec")
                     .font(.headline)
-                
+
                 Slider(value: $switchInterval, in: 0...60, step: 1)
                     .padding()
-                
+
                 Divider()
-                
+
                 Text("Words Displayed: \(numberOfWordsToShow)")
                     .font(.headline)
-                
+
                 Slider(
                     value: Binding(
                         get: { Double(numberOfWordsToShow) },
@@ -54,12 +96,12 @@ struct SettingsView: View {
                     step: 1
                 )
                 .padding()
-                
+
                 Divider()
-                
+
                 Text("Minimum Word Length: \(minimumWordLength)")
                     .font(.headline)
-                
+
                 Slider(
                     value: Binding(
                         get: { Double(minimumWordLength) },
@@ -69,15 +111,15 @@ struct SettingsView: View {
                     step: 1
                 )
                 .padding()
-                
+
                 if !availableCSVs.isEmpty {
                     Divider()
-                    
+
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Ignore Minimum Length For")
                             .font(.headline)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        
+
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(availableCSVs, id: \.self) { csv in
                                 Toggle(
@@ -98,17 +140,24 @@ struct SettingsView: View {
                         .padding(.horizontal)
                     }
                 }
-                
+
                 Divider()
-                
+
                 Toggle("Fair List Distribution", isOn: $fairWordDistribution)
                     .padding(.horizontal)
-                
-                Divider()
-                
+            }
+            .padding()
+        }
+        .navigationTitle("Random Words")
+    }
+
+    private var appearancesSettings: some View {
+        ScrollView {
+            VStack(spacing: 15) {
+
                 Text("Word Font")
                     .font(.headline)
-                
+
                 Picker("Word Font", selection: $selectedWordFontRaw) {
                     ForEach(availableFonts, id: \.self) { fontName in
                         Text(fontName).tag(fontName)
@@ -116,12 +165,12 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.menu)
                 .padding(.horizontal)
-                
+
                 Divider()
-                
+
                 Text("Appearance")
                     .font(.headline)
-                
+
                 Picker("Theme", selection: $selectedThemeRaw) {
                     Text("System").tag("System")
                     Text("Light").tag("Light")
@@ -129,9 +178,25 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal)
+
+                Divider()
+
+                Text("Orientation")
+                    .font(.headline)
+
+                Picker("Orientation", selection: $orientationLockRaw) {
+                    ForEach(OrientationLock.allCases, id: \.rawValue) { lock in
+                        Text(lock.rawValue).tag(lock.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .onChange(of: orientationLockRaw) {
+                    (OrientationLock(rawValue: orientationLockRaw) ?? .none).apply()
+                }
             }
             .padding()
         }
-        .navigationTitle("Settings")
+        .navigationTitle("Appearances")
     }
 }
