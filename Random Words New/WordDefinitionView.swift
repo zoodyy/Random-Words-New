@@ -371,6 +371,16 @@ struct WordDefinitionView: View {
         return entries[min(currentIndex, entries.count - 1)]
     }
 
+    private func showPreviousDefinition() {
+        guard let entries, !entries.isEmpty, currentIndex > 0 else { return }
+        currentIndex -= 1
+    }
+
+    private func showNextDefinition() {
+        guard let entries, currentIndex < entries.count - 1 else { return }
+        currentIndex += 1
+    }
+
     private func sourceBadge(for entry: DictionaryEntry) -> String? {
         switch entry.source {
         case .user: return "Your definition"
@@ -417,7 +427,7 @@ struct WordDefinitionView: View {
                         if entries.count > 1 {
                             HStack(spacing: 24) {
                                 Button {
-                                    currentIndex -= 1
+                                    showPreviousDefinition()
                                 } label: {
                                     Image(systemName: "chevron.left.circle.fill")
                                         .font(.title)
@@ -430,7 +440,7 @@ struct WordDefinitionView: View {
                                     .monospacedDigit()
 
                                 Button {
-                                    currentIndex += 1
+                                    showNextDefinition()
                                 } label: {
                                     Image(systemName: "chevron.right.circle.fill")
                                         .font(.title)
@@ -465,6 +475,20 @@ struct WordDefinitionView: View {
                 }
             }
             .padding(.top, 16)
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 30)
+                    .onEnded { value in
+                        // Only react to mostly-horizontal swipes so vertical
+                        // scrolling and sheet dismissal keep working.
+                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                        if value.translation.width < 0 {
+                            showNextDefinition()
+                        } else {
+                            showPreviousDefinition()
+                        }
+                    }
+            )
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 16) {
