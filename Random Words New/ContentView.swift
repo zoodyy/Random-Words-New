@@ -50,7 +50,7 @@ struct ContentView: View {
     @AppStorage("fairWordDistribution") private var fairWordDistribution: Bool = false
     @AppStorage("selectedTheme") private var selectedThemeRaw: String = AppTheme.system.rawValue
     @AppStorage("minimumWordLength") private var minimumWordLength: Int = 1
-    @AppStorage("selectedWordFont") private var selectedWordFontRaw: String = "Default"
+    @AppStorage("selectedWordFont") private var selectedWordFontRaw: String = "American Typewriter"
     
     @AppStorage("selectedCSVsData") private var selectedCSVsData: Data = Data()
     @AppStorage("csvRangesData") private var csvRangesData: Data = Data()
