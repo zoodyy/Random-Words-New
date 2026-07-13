@@ -123,13 +123,13 @@ struct DictView: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
-                    shareSelectedCSVs = Set(activeCSVFiles)
+                    shareSelectedCSVs = Set(orderedCSVFiles)
                     exportRanges = false
                     showingShareOptions = true
                 } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
-                .disabled(activeCSVFiles.isEmpty)
+                .disabled(orderedCSVFiles.isEmpty)
                 
                 Button {
                     showingAddOptions = true
@@ -176,7 +176,7 @@ struct DictView: View {
             NavigationStack {
                 List {
                     Section("CSV Files") {
-                        ForEach(activeCSVFiles, id: \.self) { file in
+                        ForEach(orderedCSVFiles, id: \.self) { file in
                             Button {
                                 if shareSelectedCSVs.contains(file) {
                                     shareSelectedCSVs.remove(file)
@@ -259,7 +259,7 @@ struct DictView: View {
         
         try FileManager.default.createDirectory(at: exportFolderURL, withIntermediateDirectories: true)
         
-        let selectedFilesInOrder = activeCSVFiles.filter { shareSelectedCSVs.contains($0) }
+        let selectedFilesInOrder = orderedCSVFiles.filter { shareSelectedCSVs.contains($0) }
         
         for file in selectedFilesInOrder {
             let sourceURL = getReadableURL(for: file)
@@ -273,6 +273,9 @@ struct DictView: View {
         if exportRanges {
             let txtURL = exportFolderURL.appendingPathComponent("ranges.txt")
             let txtContent = selectedFilesInOrder.map { file in
+                guard selectedCSVs.contains(file) else {
+                    return "\(file)=0-0"
+                }
                 let range = csvRanges[file] ?? (0.0, 1.0)
                 let lowerPercent = Int(range.0 * 100)
                 let upperPercent = Int(range.1 * 100)
@@ -469,7 +472,12 @@ struct DictView: View {
                 if !csvFiles.contains(fileName) {
                     csvFiles.insert(fileName, at: 0)
                 }
-                
+
+                // A 0-0 range marks a CSV that was exported while inactive
+                if range.0 == 0.0 && range.1 == 0.0 {
+                    continue
+                }
+
                 selectedCSVs.insert(fileName)
                 csvRanges[fileName] = range
                 refreshPreviewInfo(for: fileName)
