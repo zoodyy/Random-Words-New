@@ -75,6 +75,7 @@ struct ContentView: View {
     
     @State private var navigateToCSV: String?
     @State private var selectedWordSource: (csv: String, word: String)?
+    @State private var definitionTarget: DefinitionTarget?
     
     @State private var wordHistory: [[String]] = []
     @State private var historyIndex: Int = -1
@@ -92,6 +93,8 @@ struct ContentView: View {
                 
                 if value.translation.height < -100 {
                     handleUpSwipe()
+                } else if value.translation.height > 100 {
+                    handleDownSwipe()
                 }
             }
     }
@@ -171,6 +174,9 @@ struct ContentView: View {
                             scrollToWord: source.word
                         )
                     }
+                }
+                .sheet(item: $definitionTarget) { target in
+                    WordDefinitionView(word: target.word)
                 }
                 .onAppear {
                     loadPersistedData()
@@ -380,6 +386,21 @@ struct ContentView: View {
         }
     }
     
+    private func handleDownSwipe() {
+        guard let word = selectedWords.first else { return }
+
+        pauseTimer()
+
+        withAnimation(.easeInOut(duration: 0.25)) {
+            swipeUpOffset = 400
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            swipeUpOffset = 0
+            definitionTarget = DefinitionTarget(word: word)
+        }
+    }
+
     private func addToOwnVocab(_ wordsToAdd: [String]) {
         let fileURL = getOwnVocabURL()
         
