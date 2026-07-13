@@ -1,4 +1,24 @@
 import SwiftUI
+import Network
+
+/// One-shot connectivity check used before attempting automatic downloads.
+nonisolated enum NetworkReachability {
+    static func hasConnection() async -> Bool {
+        await withCheckedContinuation { continuation in
+            let monitor = NWPathMonitor()
+            nonisolated(unsafe) var hasResumed = false
+            monitor.pathUpdateHandler = { path in
+                // The handler runs serially on the monitor queue, and may still
+                // fire once more after cancel(), so guard against double resume.
+                guard !hasResumed else { return }
+                hasResumed = true
+                monitor.cancel()
+                continuation.resume(returning: path.status == .satisfied)
+            }
+            monitor.start(queue: DispatchQueue(label: "NetworkReachabilityCheck"))
+        }
+    }
+}
 
 nonisolated enum DefinitionSource: Sendable {
     case user
@@ -364,6 +384,13 @@ struct WordDefinitionView: View {
     @State private var showingDeleteAlert = false
     @State private var isDownloading = false
     @State private var downloadError: String?
+    @State private var autoDownloadFailed = false
+
+    @AppStorage("autoDownloadWordDefinitions") private var autoDownloadDefinitions = true
+
+    private var showsDownloadButton: Bool {
+        !autoDownloadDefinitions || autoDownloadFailed
+    }
 
     private var currentEntry: DictionaryEntry? {
         guard let entries, !entries.isEmpty else { return nil }
@@ -494,7 +521,7 @@ struct WordDefinitionView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     if isDownloading {
                         ProgressView()
-                    } else {
+                    } else if showsDownloadButton {
                         Button {
                             downloadDefinitions()
                         } label: {
@@ -544,8 +571,19 @@ struct WordDefinitionView: View {
             Text("Are you sure you want to delete this definition of \"\(word)\"?")
         }
         .task {
-            entries = await EnglishDictionaryStore.shared.definitions(for: word)
+            let loaded = await EnglishDictionaryStore.shared.definitions(for: word)
+            entries = loaded
+            await autoDownloadIfNeeded(existingEntries: loaded)
         }
+    }
+
+    /// Automatically fetches online definitions when the setting is enabled,
+    /// the word hasn't been downloaded before, and the device is online.
+    private func autoDownloadIfNeeded(existingEntries: [DictionaryEntry]) async {
+        guard autoDownloadDefinitions, !isDownloading else { return }
+        guard !existingEntries.contains(where: { $0.source == .downloaded }) else { return }
+        guard await NetworkReachability.hasConnection() else { return }
+        downloadDefinitions(automatically: true)
     }
 
     private func addDefinition(wordType: String, definition: String) {
@@ -570,7 +608,7 @@ struct WordDefinitionView: View {
         }
     }
 
-    private func downloadDefinitions() {
+    private func downloadDefinitions(automatically: Bool = false) {
         isDownloading = true
         downloadError = nil
 
@@ -578,11 +616,22 @@ struct WordDefinitionView: View {
             do {
                 let updated = try await EnglishDictionaryStore.shared.downloadDefinitions(for: word)
                 entries = updated
-                currentIndex = updated.firstIndex { $0.source == .downloaded } ?? 0
+                if !automatically {
+                    currentIndex = updated.firstIndex { $0.source == .downloaded } ?? 0
+                }
+                autoDownloadFailed = false
             } catch DefinitionDownloadError.notFound {
-                downloadError = "No definitions found online for \"\(word)\"."
+                if automatically {
+                    autoDownloadFailed = true
+                } else {
+                    downloadError = "No definitions found online for \"\(word)\"."
+                }
             } catch {
-                downloadError = "Download failed. Check your internet connection."
+                if automatically {
+                    autoDownloadFailed = true
+                } else {
+                    downloadError = "Download failed. Check your internet connection."
+                }
             }
             isDownloading = false
         }

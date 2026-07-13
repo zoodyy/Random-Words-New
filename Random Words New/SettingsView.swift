@@ -36,6 +36,7 @@ struct SettingsView: View {
 
     @AppStorage("orientationLock") private var orientationLockRaw: String = OrientationLock.none.rawValue
     @AppStorage(WordVisualKeys.userCustomised) private var wordScreenCustomised = false
+    @AppStorage("autoDownloadWordDefinitions") private var autoDownloadWordDefinitions = true
 
     /// Set when a theme change should also restyle the word screen but the user
     /// has customised it — drives the "switch or keep?" alert.
@@ -54,8 +55,25 @@ struct SettingsView: View {
             } label: {
                 Label("Appearances", systemImage: "paintbrush")
             }
+
+            NavigationLink {
+                dictionarySettings
+            } label: {
+                Label("Dictionary", systemImage: "character.book.closed")
+            }
         }
         .navigationTitle("Settings")
+    }
+
+    private var dictionarySettings: some View {
+        Form {
+            Section {
+                Toggle("Automatically Download Word Definitions", isOn: $autoDownloadWordDefinitions)
+            } footer: {
+                Text("When you open a word's definitions, additional definitions are downloaded from the internet automatically. The manual download button is hidden unless a download fails.")
+            }
+        }
+        .navigationTitle("Dictionary")
     }
 
     private var randomWordsSettings: some View {
