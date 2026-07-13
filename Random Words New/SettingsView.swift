@@ -35,6 +35,11 @@ struct SettingsView: View {
     let availableCSVs: [String]
 
     @AppStorage("orientationLock") private var orientationLockRaw: String = OrientationLock.none.rawValue
+    @AppStorage(WordVisualKeys.userCustomised) private var wordScreenCustomised = false
+
+    /// Set when a theme change should also restyle the word screen but the user
+    /// has customised it — drives the "switch or keep?" alert.
+    @State private var pendingWordScreenScheme: ColorScheme?
 
     var body: some View {
         List {
@@ -143,6 +148,9 @@ struct SettingsView: View {
                     Text("Dark").tag("Dark")
                 }
                 .pickerStyle(.segmented)
+                .onChange(of: selectedThemeRaw) { oldTheme, newTheme in
+                    handleThemeChange(from: oldTheme, to: newTheme)
+                }
             }
 
             Section("Orientation") {
@@ -166,5 +174,47 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Appearances")
+        .alert("Random Word Screen", isPresented: Binding(
+            get: { pendingWordScreenScheme != nil },
+            set: { if !$0 { pendingWordScreenScheme = nil } }
+        )) {
+            Button("Switch") {
+                if let scheme = pendingWordScreenScheme {
+                    WordScreenPreset.standard(for: scheme).writeToDefaults()
+                    // Back on the standard look, so future theme changes may
+                    // switch it silently again.
+                    wordScreenCustomised = false
+                }
+                pendingWordScreenScheme = nil
+            }
+            Button("Keep Current", role: .cancel) {
+                pendingWordScreenScheme = nil
+            }
+        } message: {
+            Text("Do you also want to switch the random word screen to the standard \(pendingWordScreenScheme == .dark ? "dark" : "light") look? Your customisations will be replaced.")
+        }
+    }
+
+    /// The word-screen appearance a theme implies: the theme itself, or the
+    /// device's setting when following the system.
+    private func wordScreenScheme(forTheme raw: String) -> ColorScheme {
+        switch raw {
+        case "Light": return .light
+        case "Dark":  return .dark
+        default:      return WordScreenPreset.deviceColorScheme
+        }
+    }
+
+    /// When the appearance actually changes: restyle an untouched word screen
+    /// silently, or ask first if the user has customised it.
+    private func handleThemeChange(from oldTheme: String, to newTheme: String) {
+        let newScheme = wordScreenScheme(forTheme: newTheme)
+        guard wordScreenScheme(forTheme: oldTheme) != newScheme else { return }
+
+        if wordScreenCustomised {
+            pendingWordScreenScheme = newScheme
+        } else {
+            WordScreenPreset.standard(for: newScheme).writeToDefaults()
+        }
     }
 }

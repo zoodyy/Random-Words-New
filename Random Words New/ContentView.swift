@@ -57,6 +57,11 @@ struct ContentView: View {
     @AppStorage(WordVisualKeys.timerStyle) private var timerIndicatorStyleRaw: String = WordVisualDefaults.timerStyle
     @AppStorage(WordVisualKeys.timerPosition) private var timerIndicatorPositionRaw: String = WordVisualDefaults.timerPosition
     @AppStorage(WordVisualKeys.timerColor) private var timerIndicatorColorRaw: String = WordVisualDefaults.timerColor
+    @AppStorage(WordVisualKeys.userCustomised) private var wordScreenCustomised: Bool = false
+
+    /// The scheme the window is actually rendered in. With a Light/Dark theme
+    /// override this reflects the override; on "System" it's the device setting.
+    @Environment(\.colorScheme) private var renderedColorScheme
 
     @AppStorage("selectedCSVsData") private var selectedCSVsData: Data = Data()
     @AppStorage("csvRangesData") private var csvRangesData: Data = Data()
@@ -170,6 +175,7 @@ struct ContentView: View {
                     WordDefinitionView(word: target.word)
                 }
                 .onAppear {
+                    syncDefaultWordScreenStyle()
                     isScreenVisible = true
                     if hasLoadedOnce {
                         // Returning from another screen: refresh CSV contents
@@ -239,6 +245,9 @@ struct ContentView: View {
                 .onChange(of: minimumWordLength) { _ in
                     rebuildWordPools()
                     selectRandomWords(recordHistory: true)
+                }
+                .onChange(of: renderedColorScheme) { _ in
+                    syncDefaultWordScreenStyle()
                 }
         }
         .preferredColorScheme(colorScheme)
@@ -361,6 +370,15 @@ struct ContentView: View {
     
     private var hasAvailableWords: Bool {
         totalEligibleWordCount > 0
+    }
+
+    /// While the user hasn't customised the word screen, keep it on the standard
+    /// Light/Dark preset matching the current appearance (theme setting, or the
+    /// device's light/dark mode when following the system).
+    private func syncDefaultWordScreenStyle() {
+        guard !wordScreenCustomised else { return }
+        let scheme = colorScheme ?? renderedColorScheme
+        WordScreenPreset.standard(for: scheme).writeToDefaults()
     }
 
     private var timerIndicatorStyle: TimerIndicatorStyle {

@@ -160,6 +160,10 @@ enum WordVisualKeys {
     static let timerStyle      = "word_timerStyle"
     static let timerPosition   = "word_timerPosition"
     static let timerColor      = "word_timerColor"
+    /// True once the user has touched anything on the customise screen. While
+    /// false, the word screen silently follows the standard Light/Dark preset
+    /// for the current appearance.
+    static let userCustomised  = "word_userCustomised"
 }
 
 /// Default values. Colours default to an empty string meaning "not picked yet":
@@ -369,6 +373,37 @@ struct WordScreenPreset: Identifiable {
     ]
 }
 
+extension WordScreenPreset {
+    /// The bundled "Light" / "Dark" preset (standard black/white look with the
+    /// faint grey word underline), used as the word screen's default appearance.
+    static func standard(for scheme: ColorScheme) -> WordScreenPreset {
+        let name = scheme == .dark ? "Dark" : "Light"
+        return all.first { $0.name == name } ?? all[0]
+    }
+
+    /// The device's own light/dark setting. Read from the screen rather than the
+    /// SwiftUI environment, because the in-app theme override changes the whole
+    /// window's environment colour scheme.
+    static var deviceColorScheme: ColorScheme {
+        let style = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.screen.traitCollection.userInterfaceStyle
+        return style == .dark ? .dark : .light
+    }
+
+    /// Writes this preset's values to UserDefaults, where the word screen and
+    /// the customise screen pick them up live.
+    func writeToDefaults() {
+        let defaults = UserDefaults.standard
+        defaults.set(textColor, forKey: WordVisualKeys.textColor)
+        defaults.set(backgroundColor, forKey: WordVisualKeys.backgroundColor)
+        defaults.set(font, forKey: "selectedWordFont")
+        defaults.set(timerStyle.rawValue, forKey: WordVisualKeys.timerStyle)
+        defaults.set(timerPosition.rawValue, forKey: WordVisualKeys.timerPosition)
+        defaults.set(timerColor, forKey: WordVisualKeys.timerColor)
+    }
+}
+
 // MARK: - Settings screen
 
 /// Customises the look of the random-word screen. A live preview at the top —
@@ -380,6 +415,7 @@ struct CustomiseWordScreenView: View {
     @AppStorage(WordVisualKeys.timerStyle)      private var timerStyle      = WordVisualDefaults.timerStyle
     @AppStorage(WordVisualKeys.timerPosition)   private var timerPosition   = WordVisualDefaults.timerPosition
     @AppStorage(WordVisualKeys.timerColor)      private var timerColor      = WordVisualDefaults.timerColor
+    @AppStorage(WordVisualKeys.userCustomised)  private var userCustomised  = false
     @AppStorage("selectedWordFont")             private var selectedWordFontRaw = "American Typewriter"
 
     /// Anchors the preview's clock so the demo starts at the first word with a
@@ -474,6 +510,7 @@ struct CustomiseWordScreenView: View {
             presetsSection
         }
         .onChange(of: timerStyle) {
+            userCustomised = true
             // Each style has its own sensible placements; drop invalid leftovers
             // when switching styles.
             let style = selectedStyle
@@ -482,6 +519,8 @@ struct CustomiseWordScreenView: View {
                 timerPosition = style.defaultPosition.rawValue
             }
         }
+        .onChange(of: timerPosition) { userCustomised = true }
+        .onChange(of: selectedWordFontRaw) { userCustomised = true }
     }
 
     // MARK: - Presets
@@ -526,12 +565,8 @@ struct CustomiseWordScreenView: View {
     }
 
     private func apply(_ preset: WordScreenPreset) {
-        textColor = preset.textColor
-        backgroundColor = preset.backgroundColor
-        selectedWordFontRaw = preset.font
-        timerStyle = preset.timerStyle.rawValue
-        timerPosition = preset.timerPosition.rawValue
-        timerColor = preset.timerColor
+        preset.writeToDefaults()
+        userCustomised = true
     }
 
     private func matchesCurrent(_ preset: WordScreenPreset) -> Bool {
@@ -640,16 +675,16 @@ struct CustomiseWordScreenView: View {
     /// expects, showing the theme default while no colour has been picked.
     private var textColorBinding: Binding<Color> {
         Binding(get: { WordScreenStyle.resolvedTextColor(textColor) },
-                set: { textColor = $0.hexString })
+                set: { textColor = $0.hexString; userCustomised = true })
     }
 
     private var backgroundColorBinding: Binding<Color> {
         Binding(get: { WordScreenStyle.resolvedBackground(backgroundColor) },
-                set: { backgroundColor = $0.hexString })
+                set: { backgroundColor = $0.hexString; userCustomised = true })
     }
 
     private var timerColorBinding: Binding<Color> {
         Binding(get: { WordScreenStyle.resolvedTimerColor(timerColor, textColor: textColor) },
-                set: { timerColor = $0.hexString })
+                set: { timerColor = $0.hexString; userCustomised = true })
     }
 }
