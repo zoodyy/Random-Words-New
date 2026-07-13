@@ -270,6 +270,105 @@ extension View {
     }
 }
 
+// MARK: - Presets
+
+/// A complete, matching set of word-screen settings that can be applied in one
+/// tap from the Presets section of the customise screen.
+struct WordScreenPreset: Identifiable {
+    let name: String
+    let textColor: String
+    let backgroundColor: String
+    let font: String
+    let timerStyle: TimerIndicatorStyle
+    let timerPosition: TimerIndicatorPosition
+    let timerColor: String
+
+    var id: String { name }
+
+    static let all: [WordScreenPreset] = [
+        // The standard light/dark appearances, with and without a faint grey
+        // underline as the word timer.
+        WordScreenPreset(name: "Light Minimal",
+                         textColor: "#000000", backgroundColor: "#FFFFFF",
+                         font: "American Typewriter",
+                         timerStyle: .dontShow, timerPosition: .bottom,
+                         timerColor: "#D1D1D6"),
+        WordScreenPreset(name: "Dark Minimal",
+                         textColor: "#FFFFFF", backgroundColor: "#000000",
+                         font: "American Typewriter",
+                         timerStyle: .dontShow, timerPosition: .bottom,
+                         timerColor: "#3A3A3C"),
+        WordScreenPreset(name: "Light",
+                         textColor: "#000000", backgroundColor: "#FFFFFF",
+                         font: "American Typewriter",
+                         timerStyle: .horizontalLine, timerPosition: .underline,
+                         timerColor: "#D1D1D6"),
+        WordScreenPreset(name: "Dark",
+                         textColor: "#FFFFFF", backgroundColor: "#000000",
+                         font: "American Typewriter",
+                         timerStyle: .horizontalLine, timerPosition: .underline,
+                         timerColor: "#3A3A3C"),
+
+        // Colour themes. Each keeps its word, background and timer colours in
+        // the same palette.
+        WordScreenPreset(name: "Bubblegum",
+                         textColor: "#D6336C", backgroundColor: "#FFD1DC",
+                         font: "Marker Felt",
+                         timerStyle: .circle, timerPosition: .topRight,
+                         timerColor: "#FF8FAB"),
+        WordScreenPreset(name: "Ocean",
+                         textColor: "#7FDBFF", backgroundColor: "#0A2E4D",
+                         font: "Avenir Next",
+                         timerStyle: .verticalLine, timerPosition: .right,
+                         timerColor: "#4FB3D9"),
+        WordScreenPreset(name: "Forest",
+                         textColor: "#D8F3DC", backgroundColor: "#1B3022",
+                         font: "Georgia",
+                         timerStyle: .horizontalLine, timerPosition: .bottom,
+                         timerColor: "#588157"),
+        WordScreenPreset(name: "Sunset",
+                         textColor: "#FF9E64", backgroundColor: "#4A1942",
+                         font: "Futura",
+                         timerStyle: .circle, timerPosition: .topRight,
+                         timerColor: "#E05263"),
+        WordScreenPreset(name: "Midnight",
+                         textColor: "#E0E1DD", backgroundColor: "#0D1B2A",
+                         font: "Helvetica Neue",
+                         timerStyle: .seconds, timerPosition: .topRight,
+                         timerColor: "#778DA9"),
+        WordScreenPreset(name: "Lemonade",
+                         textColor: "#F57F17", backgroundColor: "#FFF9C4",
+                         font: "Chalkboard",
+                         timerStyle: .horizontalLine, timerPosition: .top,
+                         timerColor: "#FBC02D"),
+        WordScreenPreset(name: "Lavender",
+                         textColor: "#5E4B8B", backgroundColor: "#E6E0F8",
+                         font: "Baskerville",
+                         timerStyle: .verticalLine, timerPosition: .left,
+                         timerColor: "#9D8CD6"),
+        WordScreenPreset(name: "Mint",
+                         textColor: "#1B7A5A", backgroundColor: "#DFF7EC",
+                         font: "Gill Sans",
+                         timerStyle: .horizontalLine, timerPosition: .underline,
+                         timerColor: "#7CCDB0"),
+        WordScreenPreset(name: "Terracotta",
+                         textColor: "#FFF3E4", backgroundColor: "#B85C38",
+                         font: "Palatino",
+                         timerStyle: .circle, timerPosition: .bottomRight,
+                         timerColor: "#E0A458"),
+        WordScreenPreset(name: "Slate",
+                         textColor: "#CAD2C5", backgroundColor: "#2F3E46",
+                         font: "Default",
+                         timerStyle: .horizontalLine, timerPosition: .bottom,
+                         timerColor: "#84A98C"),
+        WordScreenPreset(name: "Coffee",
+                         textColor: "#D7CCC8", backgroundColor: "#3E2723",
+                         font: "American Typewriter",
+                         timerStyle: .seconds, timerPosition: .bottomLeft,
+                         timerColor: "#A1887F")
+    ]
+}
+
 // MARK: - Settings screen
 
 /// Customises the look of the random-word screen. A live preview at the top —
@@ -366,6 +465,8 @@ struct CustomiseWordScreenView: View {
             } footer: {
                 Text("Shows how long is left before the next random word appears. Hidden in manual mode.")
             }
+
+            presetsSection
         }
         .onChange(of: timerStyle) {
             // Each style has its own sensible placements; drop invalid leftovers
@@ -376,6 +477,66 @@ struct CustomiseWordScreenView: View {
                 timerPosition = style.defaultPosition.rawValue
             }
         }
+    }
+
+    // MARK: - Presets
+
+    private var presetsSection: some View {
+        Section {
+            ForEach(WordScreenPreset.all) { preset in
+                Button {
+                    apply(preset)
+                } label: {
+                    HStack {
+                        presetSwatch(preset)
+                        Text(preset.name)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if matchesCurrent(preset) {
+                            Image(systemName: "checkmark")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("Presets")
+        } footer: {
+            Text("Select a preset to apply its colours, font and timer style. You can still tweak everything above afterwards.")
+        }
+    }
+
+    /// A small sample of the preset: its word colour on its background.
+    private func presetSwatch(_ preset: WordScreenPreset) -> some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(Color(hex: preset.backgroundColor))
+            .frame(width: 42, height: 28)
+            .overlay(
+                Text("Aa")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(Color(hex: preset.textColor))
+            )
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.gray.opacity(0.3)))
+    }
+
+    private func apply(_ preset: WordScreenPreset) {
+        textColor = preset.textColor
+        backgroundColor = preset.backgroundColor
+        selectedWordFontRaw = preset.font
+        timerStyle = preset.timerStyle.rawValue
+        timerPosition = preset.timerPosition.rawValue
+        timerColor = preset.timerColor
+    }
+
+    private func matchesCurrent(_ preset: WordScreenPreset) -> Bool {
+        textColor == preset.textColor
+            && backgroundColor == preset.backgroundColor
+            && selectedWordFontRaw == preset.font
+            && timerStyle == preset.timerStyle.rawValue
+            && (timerStyle == TimerIndicatorStyle.dontShow.rawValue
+                || (timerPosition == preset.timerPosition.rawValue
+                    && timerColor == preset.timerColor))
     }
 
     // MARK: - Preview
