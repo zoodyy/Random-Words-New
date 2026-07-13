@@ -201,6 +201,10 @@ struct TimerIndicatorView: View {
     let progress: Double
     let secondsRemaining: Int
 
+    /// Shrinks the circle style (1 = full size). Used by the settings preview,
+    /// which scales the circle down as the preview collapses.
+    var circleScale: CGFloat = 1
+
     var body: some View {
         GeometryReader { geo in
             Group {
@@ -222,7 +226,7 @@ struct TimerIndicatorView: View {
                         .trim(from: 0, to: max(0, min(1, progress)))
                         .stroke(color, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                        .frame(width: 30, height: 30)
+                        .frame(width: 30 * circleScale, height: 30 * circleScale)
                         .padding(10)
                 case .seconds:
                     Text("\(secondsRemaining)")
@@ -337,19 +341,39 @@ struct CustomiseWordScreenView: View {
 
     // MARK: - Preview
 
+    /// How small the preview may collapse, as a fraction of its full height.
+    /// Styles that sit above/below the word need a taller collapsed state so the
+    /// indicator keeps a little distance from the word.
+    private var collapsedMinHeightFactor: CGFloat {
+        switch selectedStyle {
+        case .dontShow:         return 0.38
+        case .horizontalLine:   return 0.46
+        case .verticalLine:     return 0.42
+        case .circle, .seconds: return 0.52
+        }
+    }
+
     /// The preview, pinned above the scrolling form. While the form scrolls, the
     /// preview doesn't move away; it collapses instead, cropping the canvas from
     /// top and bottom (never rescaling the drawing) until only the central band
-    /// with the demo word remains.
+    /// with the demo word remains. The timer indicator isn't cropped with the
+    /// canvas: it's re-overlaid on the visible part so it always stays on screen.
     private func collapsiblePreview(width: CGFloat, fullHeight: CGFloat) -> some View {
-        let minHeight = max(fullHeight * 0.38, 44)
+        let minHeight = max(fullHeight * collapsedMinHeightFactor, 44)
         let visibleHeight = min(fullHeight, max(minHeight, fullHeight - max(0, scrollOffset)))
         let topCrop = (fullHeight - visibleHeight) / 2
+        let collapsible = fullHeight - minHeight
+        let collapseFraction = collapsible > 0 ? (fullHeight - visibleHeight) / collapsible : 0
 
         return previewContent(height: fullHeight)
             .frame(width: width, height: fullHeight)
             .offset(y: -topCrop)
             .frame(width: width, height: visibleHeight, alignment: .top)
+            .overlay {
+                if selectedStyle != .dontShow {
+                    indicatorOverlay(circleScale: 1 - 0.35 * collapseFraction)
+                }
+            }
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(.gray.opacity(0.3)))
             .padding(.horizontal, Self.previewSidePadding)
@@ -358,11 +382,11 @@ struct CustomiseWordScreenView: View {
             .background(Color(.systemGroupedBackground))
     }
 
+    /// The croppable canvas: background and cycling demo word only.
     private func previewContent(height: CGFloat) -> some View {
         TimelineView(.animation) { timeline in
             let elapsed = max(0, timeline.date.timeIntervalSince(start))
             let cycle = Int(elapsed / Self.demoInterval)
-            let remaining = Self.demoInterval - elapsed.truncatingRemainder(dividingBy: Self.demoInterval)
             let word = Self.demoWords[cycle % Self.demoWords.count]
 
             ZStack {
@@ -374,18 +398,28 @@ struct CustomiseWordScreenView: View {
                     .foregroundColor(WordScreenStyle.resolvedTextColor(textColor))
                     .lineLimit(1)
                     .minimumScaleFactor(0.2)
-                    .padding(.horizontal, 12)
-
-                if selectedStyle != .dontShow {
-                    TimerIndicatorView(
-                        style: selectedStyle,
-                        position: TimerIndicatorPosition(rawValue: timerPosition)
-                            ?? selectedStyle.defaultPosition,
-                        color: WordScreenStyle.resolvedTimerColor(timerColor, textColor: textColor),
-                        progress: remaining / Self.demoInterval,
-                        secondsRemaining: Int(remaining.rounded(.up)))
-                }
+                    // Leave room next to the word when a line runs down an edge.
+                    .padding(.horizontal, selectedStyle == .verticalLine ? 28 : 12)
             }
+        }
+    }
+
+    /// The timer indicator, drawn over the visible (possibly collapsed) part of
+    /// the preview so it never gets cropped away. Runs on the same clock as the
+    /// word cycling above, so word changes and the countdown stay in sync.
+    private func indicatorOverlay(circleScale: CGFloat) -> some View {
+        TimelineView(.animation) { timeline in
+            let elapsed = max(0, timeline.date.timeIntervalSince(start))
+            let remaining = Self.demoInterval - elapsed.truncatingRemainder(dividingBy: Self.demoInterval)
+
+            TimerIndicatorView(
+                style: selectedStyle,
+                position: TimerIndicatorPosition(rawValue: timerPosition)
+                    ?? selectedStyle.defaultPosition,
+                color: WordScreenStyle.resolvedTimerColor(timerColor, textColor: textColor),
+                progress: remaining / Self.demoInterval,
+                secondsRemaining: Int(remaining.rounded(.up)),
+                circleScale: circleScale)
         }
     }
 
