@@ -144,15 +144,15 @@ enum WordVisualKeys {
     static let timerColor      = "word_timerColor"
 }
 
-/// Default values. Text and background colour default to an empty string,
-/// meaning "follow the app theme" (primary text on the system background), so
-/// nothing changes until the user actually picks a colour.
+/// Default values. Colours default to an empty string meaning "not picked yet":
+/// text follows the app theme, the background stays the system background, and
+/// the timer indicator matches whatever colour the word has.
 enum WordVisualDefaults {
     static let textColor       = ""
     static let backgroundColor = ""
     static let timerStyle      = TimerIndicatorStyle.dontShow.rawValue
     static let timerPosition   = TimerIndicatorPosition.bottom.rawValue
-    static let timerColor      = "#34C759"
+    static let timerColor      = ""
 }
 
 enum WordScreenStyle {
@@ -164,6 +164,11 @@ enum WordScreenStyle {
     /// The screen background: the picked colour, or the system background.
     static func resolvedBackground(_ raw: String) -> Color {
         raw.isEmpty ? Color(.systemBackground) : Color(hex: raw)
+    }
+
+    /// The timer indicator's colour: the picked colour, or the word's colour.
+    static func resolvedTimerColor(_ raw: String, textColor: String) -> Color {
+        raw.isEmpty ? resolvedTextColor(textColor) : Color(hex: raw)
     }
 }
 
@@ -196,16 +201,12 @@ struct TimerIndicatorView: View {
                         .frame(width: 5, height: max(0, geo.size.height * progress))
                         .padding(.horizontal, 6)
                 case .circle:
-                    ZStack {
-                        Circle()
-                            .stroke(color.opacity(0.25), lineWidth: 4)
-                        Circle()
-                            .trim(from: 0, to: max(0, min(1, progress)))
-                            .stroke(color, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                    }
-                    .frame(width: 30, height: 30)
-                    .padding(10)
+                    Circle()
+                        .trim(from: 0, to: max(0, min(1, progress)))
+                        .stroke(color, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 30, height: 30)
+                        .padding(10)
                 case .seconds:
                     Text("\(secondsRemaining)")
                         .font(.system(size: 26, weight: .bold).monospacedDigit())
@@ -293,7 +294,7 @@ struct CustomiseWordScreenView: View {
                             Text(position.rawValue).tag(position.rawValue)
                         }
                     }
-                    ColorPicker("Colour", selection: colorBinding($timerColor), supportsOpacity: false)
+                    ColorPicker("Colour", selection: timerColorBinding, supportsOpacity: false)
                 }
             } header: {
                 Text("Time until next word")
@@ -358,7 +359,7 @@ struct CustomiseWordScreenView: View {
                         style: selectedStyle,
                         position: TimerIndicatorPosition(rawValue: timerPosition)
                             ?? selectedStyle.defaultPosition,
-                        color: Color(hex: timerColor),
+                        color: WordScreenStyle.resolvedTimerColor(timerColor, textColor: textColor),
                         progress: remaining / Self.demoInterval,
                         secondsRemaining: Int(remaining.rounded(.up)))
                 }
@@ -380,8 +381,8 @@ struct CustomiseWordScreenView: View {
                 set: { backgroundColor = $0.hexString })
     }
 
-    private func colorBinding(_ raw: Binding<String>) -> Binding<Color> {
-        Binding(get: { Color(hex: raw.wrappedValue) },
-                set: { raw.wrappedValue = $0.hexString })
+    private var timerColorBinding: Binding<Color> {
+        Binding(get: { WordScreenStyle.resolvedTimerColor(timerColor, textColor: textColor) },
+                set: { timerColor = $0.hexString })
     }
 }

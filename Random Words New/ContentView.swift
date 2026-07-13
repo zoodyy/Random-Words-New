@@ -370,7 +370,8 @@ struct ContentView: View {
                     style: style,
                     position: TimerIndicatorPosition(rawValue: timerIndicatorPositionRaw)
                         ?? style.defaultPosition,
-                    color: Color(hex: timerIndicatorColorRaw),
+                    color: WordScreenStyle.resolvedTimerColor(
+                        timerIndicatorColorRaw, textColor: wordTextColorRaw),
                     progress: remaining / switchInterval,
                     secondsRemaining: Int(remaining.rounded(.up)))
             }
