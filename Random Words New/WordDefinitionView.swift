@@ -423,6 +423,7 @@ struct WordDefinitionView: View {
                                 .padding(.horizontal, 24)
                                 .padding(.bottom, 16)
                         }
+                        .scrollBounceBehavior(.basedOnSize)
 
                         if entries.count > 1 {
                             HStack(spacing: 24) {
