@@ -123,13 +123,31 @@ actor EnglishDictionaryStore {
             user.removeAll { $0.entry.id == id }
             userDefinitions = user
             Self.saveDefinitionsFile(user, at: Self.userDefinitionsURL, includeExampleAndPhonetic: true)
-        } else if downloaded.contains(where: { $0.entry.id == id }) {
-            downloaded.removeAll { $0.entry.id == id }
+        } else if let index = downloaded.firstIndex(where: { $0.entry.id == id }) {
+            // The in-memory list can hold session-only downloads that were
+            // never saved (see "Save Downloaded Definitions Locally"), so
+            // remove just this record from the file instead of rewriting it
+            // from memory.
+            let removed = downloaded.remove(at: index)
             downloadedDefinitions = downloaded
-            Self.saveDefinitionsFile(downloaded, at: Self.downloadedDefinitionsURL, includeExampleAndPhonetic: true)
+            Self.removeDownloadedRecord(word: removed.word, entry: removed.entry)
         }
 
         return definitions(for: word)
+    }
+
+    private nonisolated static func removeDownloadedRecord(word: String, entry: DictionaryEntry) {
+        var persisted = loadDefinitionsFile(at: downloadedDefinitionsURL, source: .downloaded)
+        guard let index = persisted.firstIndex(where: {
+            $0.word.lowercased() == word.lowercased() &&
+            $0.entry.wordType == entry.wordType &&
+            $0.entry.definition == entry.definition &&
+            $0.entry.example == entry.example &&
+            $0.entry.phonetic == entry.phonetic
+        }) else { return }
+
+        persisted.remove(at: index)
+        saveDefinitionsFile(persisted, at: downloadedDefinitionsURL, includeExampleAndPhonetic: true)
     }
 
     // MARK: - Downloading definitions
@@ -208,9 +226,25 @@ actor EnglishDictionaryStore {
         downloaded.removeAll { $0.word.lowercased() == word.lowercased() }
         downloaded.append(contentsOf: newDefinitions)
         downloadedDefinitions = downloaded
-        Self.saveDefinitionsFile(downloaded, at: Self.downloadedDefinitionsURL, includeExampleAndPhonetic: true)
+
+        // With local saving off, downloads still show for this session but
+        // are kept in memory only.
+        let saveLocally = (UserDefaults.standard.object(forKey: "saveDownloadedDefinitionsLocally") as? Bool) ?? true
+        if saveLocally {
+            Self.saveDefinitionsFile(downloaded, at: Self.downloadedDefinitionsURL, includeExampleAndPhonetic: true)
+        }
 
         return definitions(for: word)
+    }
+
+    func deleteAllDownloadedDefinitions() {
+        downloadedDefinitions = []
+        try? FileManager.default.removeItem(at: Self.downloadedDefinitionsURL)
+    }
+
+    func deleteAllUserDefinitions() {
+        userDefinitions = []
+        try? FileManager.default.removeItem(at: Self.userDefinitionsURL)
     }
 
     private nonisolated static func abbreviatedWordType(_ partOfSpeech: String) -> String {

@@ -37,6 +37,10 @@ struct SettingsView: View {
     @AppStorage("orientationLock") private var orientationLockRaw: String = OrientationLock.none.rawValue
     @AppStorage(WordVisualKeys.userCustomised) private var wordScreenCustomised = false
     @AppStorage("autoDownloadWordDefinitions") private var autoDownloadWordDefinitions = true
+    @AppStorage("saveDownloadedDefinitionsLocally") private var saveDownloadedDefinitionsLocally = true
+
+    @State private var showingDeleteDownloadedAlert = false
+    @State private var showingDeleteUserAlert = false
 
     /// Set when a theme change should also restyle the word screen but the user
     /// has customised it — drives the "switch or keep?" alert.
@@ -72,8 +76,40 @@ struct SettingsView: View {
             } footer: {
                 Text("When you open a word's definitions, additional definitions (usually better ones) are downloaded from the internet automatically. The manual download button is hidden unless a download fails.")
             }
+
+            Section {
+                Toggle("Save Downloaded Definitions Locally", isOn: $saveDownloadedDefinitionsLocally)
+            } footer: {
+                Text("Newly downloaded definitions are saved on this device so they're available offline. Turning this off doesn't delete definitions that are already saved.")
+            }
+
+            Section {
+                Button("Delete Downloaded Definitions", role: .destructive) {
+                    showingDeleteDownloadedAlert = true
+                }
+
+                Button("Delete User-Made Definitions", role: .destructive) {
+                    showingDeleteUserAlert = true
+                }
+            }
         }
         .navigationTitle("Dictionary")
+        .alert("Delete Downloaded Definitions", isPresented: $showingDeleteDownloadedAlert) {
+            Button("Delete", role: .destructive) {
+                Task { await EnglishDictionaryStore.shared.deleteAllDownloadedDefinitions() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to delete all downloaded definitions from this device? This cannot be undone.")
+        }
+        .alert("Delete User-Made Definitions", isPresented: $showingDeleteUserAlert) {
+            Button("Delete", role: .destructive) {
+                Task { await EnglishDictionaryStore.shared.deleteAllUserDefinitions() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to delete all definitions you have written? This cannot be undone.")
+        }
     }
 
     private var randomWordsSettings: some View {
