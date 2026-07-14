@@ -30,7 +30,17 @@ nonisolated struct DictionaryEntry: Identifiable, Sendable {
     let id = UUID()
     let wordType: String
     let definition: String
+    let example: String?
+    let phonetic: String?
     let source: DefinitionSource
+
+    init(wordType: String, definition: String, example: String? = nil, phonetic: String? = nil, source: DefinitionSource) {
+        self.wordType = wordType
+        self.definition = definition
+        self.example = example
+        self.phonetic = phonetic
+        self.source = source
+    }
 
     var isDeletable: Bool {
         source != .bundled
@@ -106,7 +116,7 @@ actor EnglishDictionaryStore {
         } else if downloaded.contains(where: { $0.entry.id == id }) {
             downloaded.removeAll { $0.entry.id == id }
             downloadedDefinitions = downloaded
-            Self.saveDefinitionsFile(downloaded, at: Self.downloadedDefinitionsURL)
+            Self.saveDefinitionsFile(downloaded, at: Self.downloadedDefinitionsURL, includeExampleAndPhonetic: true)
         }
 
         return definitions(for: word)
@@ -115,14 +125,29 @@ actor EnglishDictionaryStore {
     // MARK: - Downloading definitions
 
     private struct APIEntry: Decodable {
+        struct Phonetic: Decodable {
+            let text: String?
+        }
         struct Meaning: Decodable {
             struct APIDefinition: Decodable {
                 let definition: String
+                let example: String?
             }
             let partOfSpeech: String?
             let definitions: [APIDefinition]
         }
+        let phonetic: String?
+        let phonetics: [Phonetic]?
         let meanings: [Meaning]
+
+        // Homographs ("record" the noun vs. the verb) arrive as separate
+        // entries with their own pronunciations.
+        var resolvedPhonetic: String? {
+            let candidates = [phonetic] + (phonetics ?? []).map { $0.text }
+            return candidates
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty }
+        }
     }
 
     func downloadDefinitions(for word: String) async throws -> [DictionaryEntry] {
@@ -147,14 +172,18 @@ actor EnglishDictionaryStore {
 
         var newDefinitions: [(word: String, entry: DictionaryEntry)] = []
         for apiEntry in apiEntries {
+            let phonetic = apiEntry.resolvedPhonetic
             for meaning in apiEntry.meanings {
                 let wordType = Self.abbreviatedWordType(meaning.partOfSpeech ?? "")
                 for apiDefinition in meaning.definitions {
                     let text = apiDefinition.definition.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !text.isEmpty else { continue }
+                    let example = apiDefinition.example?.trimmingCharacters(in: .whitespacesAndNewlines)
                     newDefinitions.append((word, DictionaryEntry(
                         wordType: wordType,
                         definition: text,
+                        example: (example?.isEmpty == false) ? example : nil,
+                        phonetic: phonetic,
                         source: .downloaded
                     )))
                 }
@@ -169,7 +198,7 @@ actor EnglishDictionaryStore {
         downloaded.removeAll { $0.word.lowercased() == word.lowercased() }
         downloaded.append(contentsOf: newDefinitions)
         downloadedDefinitions = downloaded
-        Self.saveDefinitionsFile(downloaded, at: Self.downloadedDefinitionsURL)
+        Self.saveDefinitionsFile(downloaded, at: Self.downloadedDefinitionsURL, includeExampleAndPhonetic: true)
 
         return definitions(for: word)
     }
@@ -217,14 +246,37 @@ actor EnglishDictionaryStore {
             let word = fields[0].trimmingCharacters(in: .whitespaces)
             guard !word.isEmpty, word.lowercased() != "word" else { continue }
 
-            let definition = fields[2...]
-                .joined(separator: ",")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let definition: String
+            var example: String?
+            var phonetic: String?
+
+            if source == .downloaded {
+                // Downloaded files are only ever written by the app with
+                // properly quoted fields, so extra columns are trustworthy.
+                // Rows from before examples/phonetics existed have 3 fields.
+                definition = fields[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                if fields.count > 3 {
+                    let value = fields[3].trimmingCharacters(in: .whitespacesAndNewlines)
+                    example = value.isEmpty ? nil : value
+                }
+                if fields.count > 4 {
+                    let value = fields[4].trimmingCharacters(in: .whitespacesAndNewlines)
+                    phonetic = value.isEmpty ? nil : value
+                }
+            } else {
+                // Bundled/user files may contain unquoted commas in the
+                // definition, so treat all trailing fields as part of it.
+                definition = fields[2...]
+                    .joined(separator: ",")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
             guard !definition.isEmpty else { continue }
 
             let entry = DictionaryEntry(
                 wordType: fields[1].trimmingCharacters(in: .whitespaces),
                 definition: definition,
+                example: example,
+                phonetic: phonetic,
                 source: source
             )
             definitions.append((word, entry))
@@ -233,14 +285,19 @@ actor EnglishDictionaryStore {
         return definitions
     }
 
-    private nonisolated static func saveDefinitionsFile(_ definitions: [(word: String, entry: DictionaryEntry)], at url: URL) {
-        var lines = ["word,pos,definition"]
+    private nonisolated static func saveDefinitionsFile(_ definitions: [(word: String, entry: DictionaryEntry)], at url: URL, includeExampleAndPhonetic: Bool = false) {
+        var lines = [includeExampleAndPhonetic ? "word,pos,definition,example,phonetic" : "word,pos,definition"]
         for (word, entry) in definitions {
-            lines.append([
+            var fields = [
                 csvField(word),
                 csvField(entry.wordType),
                 csvField(entry.definition)
-            ].joined(separator: ","))
+            ]
+            if includeExampleAndPhonetic {
+                fields.append(csvField(entry.example ?? ""))
+                fields.append(csvField(entry.phonetic ?? ""))
+            }
+            lines.append(fields.joined(separator: ","))
         }
 
         try? FileManager.default.createDirectory(
@@ -397,6 +454,12 @@ struct WordDefinitionView: View {
         return entries[min(currentIndex, entries.count - 1)]
     }
 
+    // Prefer the current entry's own pronunciation (homographs can differ),
+    // falling back to any downloaded one so bundled/user entries show it too.
+    private var displayedPhonetic: String? {
+        currentEntry?.phonetic ?? entries?.compactMap(\.phonetic).first
+    }
+
     private func showPreviousDefinition() {
         guard let entries, !entries.isEmpty, currentIndex > 0 else { return }
         currentIndex -= 1
@@ -418,11 +481,19 @@ struct WordDefinitionView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
-                Text(word)
-                    .font(.largeTitle)
-                    .bold()
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
+                VStack(spacing: 4) {
+                    Text(word)
+                        .font(.largeTitle)
+                        .bold()
+                        .multilineTextAlignment(.center)
+
+                    if let phonetic = displayedPhonetic {
+                        Text(phonetic)
+                            .font(.title3)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal, 24)
 
                 if let entries {
                     if let entry = currentEntry {
@@ -434,11 +505,20 @@ struct WordDefinitionView: View {
                         }
 
                         ScrollView {
-                            Text(entry.definition)
-                                .font(.body)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 24)
-                                .padding(.bottom, 16)
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(entry.definition)
+                                    .font(.body)
+
+                                if let example = entry.example {
+                                    Text("“\(example)”")
+                                        .font(.body)
+                                        .italic()
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 16)
                         }
                         .scrollBounceBehavior(.basedOnSize)
 
