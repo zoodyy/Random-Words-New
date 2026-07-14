@@ -94,17 +94,21 @@ actor EnglishDictionaryStore {
         return userEntries + withExample + withPhoneticOnly + plain + (bundledIndex?[key] ?? [])
     }
 
-    func addUserDefinition(word: String, wordType: String, definition: String) -> (entries: [DictionaryEntry], newIndex: Int) {
+    func addUserDefinition(word: String, wordType: String, definition: String, example: String = "", phonetic: String = "") -> (entries: [DictionaryEntry], newIndex: Int) {
         var definitions = userDefinitions ?? Self.loadDefinitionsFile(at: Self.userDefinitionsURL, source: .user)
 
+        let trimmedExample = example.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPhonetic = phonetic.trimmingCharacters(in: .whitespacesAndNewlines)
         let entry = DictionaryEntry(
             wordType: wordType.trimmingCharacters(in: .whitespacesAndNewlines),
             definition: definition.trimmingCharacters(in: .whitespacesAndNewlines),
+            example: trimmedExample.isEmpty ? nil : trimmedExample,
+            phonetic: trimmedPhonetic.isEmpty ? nil : trimmedPhonetic,
             source: .user
         )
         definitions.append((word, entry))
         userDefinitions = definitions
-        Self.saveDefinitionsFile(definitions, at: Self.userDefinitionsURL)
+        Self.saveDefinitionsFile(definitions, at: Self.userDefinitionsURL, includeExampleAndPhonetic: true)
 
         let entries = self.definitions(for: word)
         let newIndex = entries.firstIndex { $0.id == entry.id } ?? 0
@@ -118,7 +122,7 @@ actor EnglishDictionaryStore {
         if user.contains(where: { $0.entry.id == id }) {
             user.removeAll { $0.entry.id == id }
             userDefinitions = user
-            Self.saveDefinitionsFile(user, at: Self.userDefinitionsURL)
+            Self.saveDefinitionsFile(user, at: Self.userDefinitionsURL, includeExampleAndPhonetic: true)
         } else if downloaded.contains(where: { $0.entry.id == id }) {
             downloaded.removeAll { $0.entry.id == id }
             downloadedDefinitions = downloaded
@@ -256,9 +260,9 @@ actor EnglishDictionaryStore {
             var example: String?
             var phonetic: String?
 
-            if source == .downloaded {
-                // Downloaded files are only ever written by the app with
-                // properly quoted fields, so extra columns are trustworthy.
+            if source != .bundled {
+                // Downloaded and user files are only ever written by the app
+                // with properly quoted fields, so extra columns are trustworthy.
                 // Rows from before examples/phonetics existed have 3 fields.
                 definition = fields[2].trimmingCharacters(in: .whitespacesAndNewlines)
                 if fields.count > 3 {
@@ -270,7 +274,7 @@ actor EnglishDictionaryStore {
                     phonetic = value.isEmpty ? nil : value
                 }
             } else {
-                // Bundled/user files may contain unquoted commas in the
+                // Bundled files may contain unquoted commas in the
                 // definition, so treat all trailing fields as part of it.
                 definition = fields[2...]
                     .joined(separator: ",")
@@ -644,8 +648,8 @@ struct WordDefinitionView: View {
             Text(downloadError ?? "")
         }
         .sheet(isPresented: $showingAddSheet) {
-            AddDefinitionView(word: word) { wordType, definition in
-                addDefinition(wordType: wordType, definition: definition)
+            AddDefinitionView(word: word) { wordType, definition, example, phonetic in
+                addDefinition(wordType: wordType, definition: definition, example: example, phonetic: phonetic)
             }
         }
         .alert("Delete Definition", isPresented: $showingDeleteAlert) {
@@ -672,12 +676,14 @@ struct WordDefinitionView: View {
         downloadDefinitions(automatically: true)
     }
 
-    private func addDefinition(wordType: String, definition: String) {
+    private func addDefinition(wordType: String, definition: String, example: String, phonetic: String) {
         Task {
             let result = await EnglishDictionaryStore.shared.addUserDefinition(
                 word: word,
                 wordType: wordType,
-                definition: definition
+                definition: definition,
+                example: example,
+                phonetic: phonetic
             )
             entries = result.entries
             currentIndex = result.newIndex
@@ -726,11 +732,13 @@ struct WordDefinitionView: View {
 
 struct AddDefinitionView: View {
     let word: String
-    let onSave: (String, String) -> Void
+    let onSave: (_ wordType: String, _ definition: String, _ example: String, _ phonetic: String) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var wordType = ""
     @State private var definitionText = ""
+    @State private var exampleText = ""
+    @State private var phoneticText = ""
 
     private var trimmedDefinition: String {
         definitionText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -747,6 +755,14 @@ struct AddDefinitionView: View {
                     TextEditor(text: $definitionText)
                         .frame(minHeight: 120)
                 }
+
+                Section("Example (optional)") {
+                    TextField("e.g. The word fit the sentence perfectly.", text: $exampleText, axis: .vertical)
+                }
+
+                Section("Phonetic transcription (optional)") {
+                    TextField("e.g. /ˈwɜːd/", text: $phoneticText)
+                }
             }
             .navigationTitle(word)
             .navigationBarTitleDisplayMode(.inline)
@@ -759,7 +775,7 @@ struct AddDefinitionView: View {
 
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        onSave(wordType, trimmedDefinition)
+                        onSave(wordType, trimmedDefinition, exampleText, phoneticText)
                         dismiss()
                     }
                     .disabled(trimmedDefinition.isEmpty)
