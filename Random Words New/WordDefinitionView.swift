@@ -85,7 +85,13 @@ actor EnglishDictionaryStore {
             .filter { $0.word.lowercased() == key }
             .map { $0.entry }
 
-        return userEntries + downloadedEntries + (bundledIndex?[key] ?? [])
+        // Within the downloaded group, surface the richest entries first:
+        // ones with examples, then ones with only a phonetic, then the rest.
+        let withExample = downloadedEntries.filter { $0.example != nil }
+        let withPhoneticOnly = downloadedEntries.filter { $0.example == nil && $0.phonetic != nil }
+        let plain = downloadedEntries.filter { $0.example == nil && $0.phonetic == nil }
+
+        return userEntries + withExample + withPhoneticOnly + plain + (bundledIndex?[key] ?? [])
     }
 
     func addUserDefinition(word: String, wordType: String, definition: String) -> (entries: [DictionaryEntry], newIndex: Int) {
