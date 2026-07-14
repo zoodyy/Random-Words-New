@@ -57,6 +57,7 @@ struct ContentView: View {
     @AppStorage(WordVisualKeys.timerStyle) private var timerIndicatorStyleRaw: String = WordVisualDefaults.timerStyle
     @AppStorage(WordVisualKeys.timerPosition) private var timerIndicatorPositionRaw: String = WordVisualDefaults.timerPosition
     @AppStorage(WordVisualKeys.timerColor) private var timerIndicatorColorRaw: String = WordVisualDefaults.timerColor
+    @AppStorage(WordVisualKeys.sideMargin) private var wordSideMargin: Double = WordVisualDefaults.sideMargin
     @AppStorage(WordVisualKeys.userCustomised) private var wordScreenCustomised: Bool = false
 
     /// The scheme the window is actually rendered in. With a Light/Dark theme
@@ -337,6 +338,7 @@ struct ContentView: View {
                         .animation(.easeInOut(duration: 0.25), value: swipeOffset)
                         .animation(.easeInOut(duration: 0.25), value: swipeUpOffset)
                     }
+                    .padding(.horizontal, wordSideMargin)
                 }
                 
                 Spacer()

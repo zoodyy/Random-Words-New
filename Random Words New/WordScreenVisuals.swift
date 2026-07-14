@@ -160,6 +160,8 @@ enum WordVisualKeys {
     static let timerStyle      = "word_timerStyle"
     static let timerPosition   = "word_timerPosition"
     static let timerColor      = "word_timerColor"
+    /// Empty space kept on the left and right of the words, in points.
+    static let sideMargin      = "word_sideMargin"
     /// True once the user has touched anything on the customise screen. While
     /// false, the word screen silently follows the standard Light/Dark preset
     /// for the current appearance.
@@ -175,6 +177,7 @@ enum WordVisualDefaults {
     static let timerStyle      = TimerIndicatorStyle.dontShow.rawValue
     static let timerPosition   = TimerIndicatorPosition.bottom.rawValue
     static let timerColor      = ""
+    static let sideMargin: Double = 0
 }
 
 enum WordScreenStyle {
@@ -415,6 +418,7 @@ struct CustomiseWordScreenView: View {
     @AppStorage(WordVisualKeys.timerStyle)      private var timerStyle      = WordVisualDefaults.timerStyle
     @AppStorage(WordVisualKeys.timerPosition)   private var timerPosition   = WordVisualDefaults.timerPosition
     @AppStorage(WordVisualKeys.timerColor)      private var timerColor      = WordVisualDefaults.timerColor
+    @AppStorage(WordVisualKeys.sideMargin)      private var sideMargin      = WordVisualDefaults.sideMargin
     @AppStorage(WordVisualKeys.userCustomised)  private var userCustomised  = false
     @AppStorage("selectedWordFont")             private var selectedWordFontRaw = "American Typewriter"
 
@@ -485,6 +489,23 @@ struct CustomiseWordScreenView: View {
 
             Section("Background") {
                 ColorPicker("Background colour", selection: backgroundColorBinding, supportsOpacity: false)
+            }
+
+            // The margin isn't part of the light/dark presets, so changing it
+            // doesn't mark the screen as customised — theme switches keep
+            // restyling colours silently and the margin survives them.
+            Section {
+                HStack {
+                    Slider(value: $sideMargin, in: 0...80, step: 1)
+                    Text("\(Int(sideMargin))")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 32, alignment: .trailing)
+                }
+            } header: {
+                Text("Side Margins")
+            } footer: {
+                Text("Empty space kept on the left and right of the words.")
             }
 
             Section {
@@ -624,7 +645,10 @@ struct CustomiseWordScreenView: View {
 
     /// The croppable canvas: background and cycling demo word only.
     private func previewContent(height: CGFloat) -> some View {
-        TimelineView(.animation) { timeline in
+        // The preview is narrower than the real screen by its side padding, so
+        // scale the user's margin down to match what the live screen will show.
+        let marginScale = height / (height + 2 * Self.previewSidePadding)
+        return TimelineView(.animation) { timeline in
             let elapsed = max(0, timeline.date.timeIntervalSince(start))
             let cycle = Int(elapsed / Self.demoInterval)
             let remaining = Self.demoInterval - elapsed.truncatingRemainder(dividingBy: Self.demoInterval)
@@ -645,7 +669,8 @@ struct CustomiseWordScreenView: View {
                         nextWordDate: timeline.date.addingTimeInterval(remaining),
                         interval: Self.demoInterval)
                     // Leave room next to the word when a line runs down an edge.
-                    .padding(.horizontal, selectedStyle == .verticalLine ? 28 : 12)
+                    .padding(.horizontal, (selectedStyle == .verticalLine ? 28 : 12)
+                                          + sideMargin * marginScale)
             }
         }
     }
