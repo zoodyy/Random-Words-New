@@ -665,151 +665,164 @@ struct WordDefinitionView: View {
         .padding(.bottom, 12)
     }
 
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                VStack(spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text(selectedWord)
-                            .font(.largeTitle)
-                            .bold()
-                            .multilineTextAlignment(.center)
+    /// The selected word's title, pronunciation, definition and the definition
+    /// navigation arrows. Kept separate from the word picker so the swipe-to-
+    /// navigate gesture can be scoped to this area alone.
+    private var definitionContent: some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(selectedWord)
+                        .font(.largeTitle)
+                        .bold()
+                        .multilineTextAlignment(.center)
 
-                        if hasPronunciationAudio {
-                            Button {
-                                pronounceWord()
-                            } label: {
-                                // Keep the icon in the layout (just hidden) while
-                                // loading so its baseline/size stay fixed and the
-                                // spinner sits exactly where the icon was.
-                                Image(systemName: "speaker.wave.2.circle.fill")
-                                    .font(.title)
-                                    .opacity(pronunciationPlayer.isLoading ? 0 : 1)
-                                    .overlay {
-                                        if pronunciationPlayer.isLoading {
-                                            ProgressView()
-                                        }
+                    if hasPronunciationAudio {
+                        Button {
+                            pronounceWord()
+                        } label: {
+                            // Keep the icon in the layout (just hidden) while
+                            // loading so its baseline/size stay fixed and the
+                            // spinner sits exactly where the icon was.
+                            Image(systemName: "speaker.wave.2.circle.fill")
+                                .font(.title)
+                                .opacity(pronunciationPlayer.isLoading ? 0 : 1)
+                                .overlay {
+                                    if pronunciationPlayer.isLoading {
+                                        ProgressView()
                                     }
-                            }
-                            .disabled(pronunciationPlayer.isLoading)
-                            .accessibilityLabel("Pronounce \(selectedWord)")
+                                }
                         }
-                    }
-
-                    if let phonetic = displayedPhonetic {
-                        Text(phonetic)
-                            .font(.title3)
-                            .foregroundColor(.secondary)
+                        .disabled(pronunciationPlayer.isLoading)
+                        .accessibilityLabel("Pronounce \(selectedWord)")
                     }
                 }
-                .padding(.horizontal, 24)
 
-                if let entries {
-                    if let entry = currentEntry {
-                        if !entry.wordType.isEmpty {
-                            Text(entry.wordType)
-                                .font(.title3)
-                                .italic()
-                                .foregroundColor(.secondary)
-                        }
+                if let phonetic = displayedPhonetic {
+                    Text(phonetic)
+                        .font(.title3)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 24)
 
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text(entry.definition)
+            if let entries {
+                if let entry = currentEntry {
+                    if !entry.wordType.isEmpty {
+                        Text(entry.wordType)
+                            .font(.title3)
+                            .italic()
+                            .foregroundColor(.secondary)
+                    }
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(entry.definition)
+                                .font(.body)
+
+                            if let example = entry.example {
+                                Text("“\(example)”")
                                     .font(.body)
-
-                                if let example = entry.example {
-                                    Text("“\(example)”")
-                                        .font(.body)
-                                        .italic()
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 24)
-                            .padding(.bottom, 16)
-                        }
-                        .scrollBounceBehavior(.basedOnSize)
-
-                        if let badge = sourceBadge(for: entry) {
-                            Text(badge)
-                                .font(.caption)
-                                .foregroundColor(.accentColor)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Color.accentColor.opacity(0.12), in: Capsule())
-                                .padding(.bottom, entries.count > 1 ? 0 : 24)
-                        }
-
-                        if entries.count > 1 {
-                            HStack(spacing: 24) {
-                                Button {
-                                    showPreviousDefinition()
-                                } label: {
-                                    Image(systemName: "chevron.left.circle.fill")
-                                        .font(.title)
-                                }
-                                .disabled(currentIndex == 0)
-
-                                Text("\(currentIndex + 1) of \(entries.count)")
-                                    .font(.subheadline)
+                                    .italic()
                                     .foregroundColor(.secondary)
-                                    .monospacedDigit()
-
-                                Button {
-                                    showNextDefinition()
-                                } label: {
-                                    Image(systemName: "chevron.right.circle.fill")
-                                        .font(.title)
-                                }
-                                .disabled(currentIndex >= entries.count - 1)
                             }
-                            .padding(.bottom, 24)
                         }
-                    } else {
-                        Spacer()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 16)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
 
-                        if isDownloading {
-                            ProgressView("Downloading definitions…")
-                        } else {
-                            Text("No definition found")
-                                .foregroundColor(.gray)
+                    if let badge = sourceBadge(for: entry) {
+                        Text(badge)
+                            .font(.caption)
+                            .foregroundColor(.accentColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                            .padding(.bottom, entries.count > 1 ? 0 : 24)
+                    }
+
+                    if entries.count > 1 {
+                        HStack(spacing: 24) {
+                            Button {
+                                showPreviousDefinition()
+                            } label: {
+                                Image(systemName: "chevron.left.circle.fill")
+                                    .font(.title)
+                            }
+                            .disabled(currentIndex == 0)
+
+                            Text("\(currentIndex + 1) of \(entries.count)")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .monospacedDigit()
 
                             Button {
-                                downloadDefinitions()
+                                showNextDefinition()
                             } label: {
-                                Label("Download definitions", systemImage: "arrow.down.circle")
+                                Image(systemName: "chevron.right.circle.fill")
+                                    .font(.title)
                             }
-                            .buttonStyle(.borderedProminent)
+                            .disabled(currentIndex >= entries.count - 1)
                         }
-
-                        Spacer()
+                        .padding(.bottom, 24)
                     }
                 } else {
                     Spacer()
-                    ProgressView("Loading definitions…")
+
+                    if isDownloading {
+                        ProgressView("Downloading definitions…")
+                    } else {
+                        Text("No definition found")
+                            .foregroundColor(.gray)
+
+                        Button {
+                            downloadDefinitions()
+                        } label: {
+                            Label("Download definitions", systemImage: "arrow.down.circle")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+
                     Spacer()
                 }
+            } else {
+                Spacer()
+                ProgressView("Loading definitions…")
+                Spacer()
+            }
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                definitionContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 30)
+                            .onEnded { value in
+                                // Only react to mostly-horizontal swipes so vertical
+                                // scrolling and sheet dismissal keep working. This
+                                // gesture is scoped to the definition area only, so
+                                // scrolling the word picker row below doesn't change
+                                // the current definition.
+                                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                                if value.translation.width < 0 {
+                                    showNextDefinition()
+                                } else {
+                                    showPreviousDefinition()
+                                }
+                            }
+                    )
 
                 if words.count > 1 {
                     wordPicker
                 }
             }
             .padding(.top, 16)
-            .contentShape(Rectangle())
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 30)
-                    .onEnded { value in
-                        // Only react to mostly-horizontal swipes so vertical
-                        // scrolling and sheet dismissal keep working.
-                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                        if value.translation.width < 0 {
-                            showNextDefinition()
-                        } else {
-                            showPreviousDefinition()
-                        }
-                    }
-            )
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if isDownloading {
