@@ -579,6 +579,7 @@ struct WordDefinitionView: View {
     @State private var downloadError: String?
     @State private var autoDownloadFailed = false
     @State private var pronunciationError: String?
+    @State private var hasPronunciationAudio = false
     @StateObject private var pronunciationPlayer = PronunciationPlayer()
 
     @AppStorage("autoDownloadWordDefinitions") private var autoDownloadDefinitions = true
@@ -626,23 +627,25 @@ struct WordDefinitionView: View {
                             .bold()
                             .multilineTextAlignment(.center)
 
-                        Button {
-                            pronounceWord()
-                        } label: {
-                            // Keep the icon in the layout (just hidden) while
-                            // loading so its baseline/size stay fixed and the
-                            // spinner sits exactly where the icon was.
-                            Image(systemName: "speaker.wave.2.circle.fill")
-                                .font(.title)
-                                .opacity(pronunciationPlayer.isLoading ? 0 : 1)
-                                .overlay {
-                                    if pronunciationPlayer.isLoading {
-                                        ProgressView()
+                        if hasPronunciationAudio {
+                            Button {
+                                pronounceWord()
+                            } label: {
+                                // Keep the icon in the layout (just hidden) while
+                                // loading so its baseline/size stay fixed and the
+                                // spinner sits exactly where the icon was.
+                                Image(systemName: "speaker.wave.2.circle.fill")
+                                    .font(.title)
+                                    .opacity(pronunciationPlayer.isLoading ? 0 : 1)
+                                    .overlay {
+                                        if pronunciationPlayer.isLoading {
+                                            ProgressView()
+                                        }
                                     }
-                                }
+                            }
+                            .disabled(pronunciationPlayer.isLoading)
+                            .accessibilityLabel("Pronounce \(word)")
                         }
-                        .disabled(pronunciationPlayer.isLoading)
-                        .accessibilityLabel("Pronounce \(word)")
                     }
 
                     if let phonetic = displayedPhonetic {
@@ -819,17 +822,24 @@ struct WordDefinitionView: View {
         .task {
             let loaded = await EnglishDictionaryStore.shared.definitions(for: word)
             entries = loaded
-            await autoDownloadIfNeeded(existingEntries: loaded)
+            // When an auto-download runs it primes the audio cache, so let its
+            // completion refresh availability; otherwise resolve it here.
+            let didStartDownload = await autoDownloadIfNeeded(existingEntries: loaded)
+            if !didStartDownload {
+                await refreshPronunciationAvailability()
+            }
         }
     }
 
     /// Automatically fetches online definitions when the setting is enabled,
     /// the word hasn't been downloaded before, and the device is online.
-    private func autoDownloadIfNeeded(existingEntries: [DictionaryEntry]) async {
-        guard autoDownloadDefinitions, !isDownloading else { return }
-        guard !existingEntries.contains(where: { $0.source == .downloaded }) else { return }
-        guard await NetworkReachability.hasConnection() else { return }
+    /// Returns `true` if a download was started.
+    private func autoDownloadIfNeeded(existingEntries: [DictionaryEntry]) async -> Bool {
+        guard autoDownloadDefinitions, !isDownloading else { return false }
+        guard !existingEntries.contains(where: { $0.source == .downloaded }) else { return false }
+        guard await NetworkReachability.hasConnection() else { return false }
         downloadDefinitions(automatically: true)
+        return true
     }
 
     private func addDefinition(wordType: String, definition: String, example: String, phonetic: String) {
@@ -844,6 +854,14 @@ struct WordDefinitionView: View {
             entries = result.entries
             currentIndex = result.newIndex
         }
+    }
+
+    /// Determines whether the word has playable audio so the speaker button is
+    /// only shown when something can actually be pronounced. Uses the in-memory
+    /// cache when available, otherwise resolves the URL from the API once.
+    private func refreshPronunciationAvailability() async {
+        let audioURL = try? await EnglishDictionaryStore.shared.pronunciationAudioURL(for: word)
+        hasPronunciationAudio = (audioURL ?? nil) != nil
     }
 
     private func pronounceWord() {
@@ -876,6 +894,8 @@ struct WordDefinitionView: View {
                     currentIndex = updated.firstIndex { $0.source == .downloaded } ?? 0
                 }
                 autoDownloadFailed = false
+                // The download primed the audio cache; reflect availability.
+                await refreshPronunciationAvailability()
             } catch DefinitionDownloadError.notFound {
                 if automatically {
                     autoDownloadFailed = true
