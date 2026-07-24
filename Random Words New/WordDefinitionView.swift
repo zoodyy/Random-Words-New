@@ -1,5 +1,7 @@
 import SwiftUI
 import Network
+import AVFoundation
+import Combine
 
 /// One-shot connectivity check used before attempting automatic downloads.
 nonisolated enum NetworkReachability {
@@ -63,6 +65,11 @@ actor EnglishDictionaryStore {
     private var bundledIndex: [String: [DictionaryEntry]]?
     private var userDefinitions: [(word: String, entry: DictionaryEntry)]?
     private var downloadedDefinitions: [(word: String, entry: DictionaryEntry)]?
+
+    // Pronunciation audio URLs are kept in memory only (never written to the
+    // definitions CSV) so a word isn't refetched from the API on every tap.
+    // The optional value distinguishes "known to have no audio" from "unknown".
+    private var pronunciationURLCache: [String: URL?] = [:]
 
     func definitions(for word: String) -> [DictionaryEntry] {
         let key = word.lowercased()
@@ -155,6 +162,7 @@ actor EnglishDictionaryStore {
     private struct APIEntry: Decodable {
         struct Phonetic: Decodable {
             let text: String?
+            let audio: String?
         }
         struct Meaning: Decodable {
             struct APIDefinition: Decodable {
@@ -175,6 +183,16 @@ actor EnglishDictionaryStore {
             return candidates
                 .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .first { !$0.isEmpty }
+        }
+
+        var resolvedAudioURL: URL? {
+            (phonetics ?? [])
+                .compactMap { $0.audio?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty }
+                .flatMap { raw in
+                    // The API occasionally returns protocol-relative URLs.
+                    URL(string: raw.hasPrefix("//") ? "https:\(raw)" : raw)
+                }
         }
     }
 
@@ -197,6 +215,10 @@ actor EnglishDictionaryStore {
         }
 
         let apiEntries = try JSONDecoder().decode([APIEntry].self, from: data)
+
+        // Remember the pronunciation URL from this same response (in memory
+        // only) so tapping the speaker button doesn't hit the API again.
+        pronunciationURLCache[word.lowercased()] = apiEntries.compactMap(\.resolvedAudioURL).first
 
         var newDefinitions: [(word: String, entry: DictionaryEntry)] = []
         for apiEntry in apiEntries {
@@ -235,6 +257,37 @@ actor EnglishDictionaryStore {
         }
 
         return definitions(for: word)
+    }
+
+    /// Resolves the pronunciation audio URL for a word from the dictionary API.
+    /// The URL is cached in memory but, like all audio, never written to disk.
+    func pronunciationAudioURL(for word: String) async throws -> URL? {
+        let key = word.lowercased()
+        if let cached = pronunciationURLCache[key] {
+            return cached
+        }
+
+        guard let encodedWord = word.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://api.dictionaryapi.dev/api/v2/entries/en/\(encodedWord)") else {
+            throw DefinitionDownloadError.notFound
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw DefinitionDownloadError.badResponse
+        }
+        if httpResponse.statusCode == 404 {
+            pronunciationURLCache[key] = URL?.none
+            return nil
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw DefinitionDownloadError.badResponse
+        }
+
+        let apiEntries = try JSONDecoder().decode([APIEntry].self, from: data)
+        let audioURL = apiEntries.compactMap(\.resolvedAudioURL).first
+        pronunciationURLCache[key] = audioURL
+        return audioURL
     }
 
     func deleteAllDownloadedDefinitions() {
@@ -476,6 +529,45 @@ actor EnglishDictionaryStore {
     }
 }
 
+/// Plays a word's pronunciation from the dictionary API. The audio bytes are
+/// held in memory only for the duration of playback and never saved to disk.
+@MainActor
+final class PronunciationPlayer: ObservableObject {
+    @Published private(set) var isLoading = false
+
+    private var player: AVAudioPlayer?
+
+    /// Returns a user-facing error message on failure, or `nil` on success.
+    func play(word: String) async -> String? {
+        guard !isLoading else { return nil }
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            guard let audioURL = try await EnglishDictionaryStore.shared.pronunciationAudioURL(for: word) else {
+                return "No pronunciation is available for \"\(word)\"."
+            }
+
+            let (data, response) = try await URLSession.shared.data(from: audioURL)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                return "Couldn't load the pronunciation for \"\(word)\"."
+            }
+
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try AVAudioSession.sharedInstance().setActive(true)
+
+            let player = try AVAudioPlayer(data: data)
+            self.player = player
+            player.play()
+            return nil
+        } catch is DefinitionDownloadError {
+            return "Couldn't load the pronunciation for \"\(word)\"."
+        } catch {
+            return "Couldn't play the pronunciation. Check your internet connection."
+        }
+    }
+}
+
 struct WordDefinitionView: View {
     let word: String
 
@@ -486,6 +578,8 @@ struct WordDefinitionView: View {
     @State private var isDownloading = false
     @State private var downloadError: String?
     @State private var autoDownloadFailed = false
+    @State private var pronunciationError: String?
+    @StateObject private var pronunciationPlayer = PronunciationPlayer()
 
     @AppStorage("autoDownloadWordDefinitions") private var autoDownloadDefinitions = true
 
@@ -526,10 +620,25 @@ struct WordDefinitionView: View {
         NavigationStack {
             VStack(spacing: 16) {
                 VStack(spacing: 4) {
-                    Text(word)
-                        .font(.largeTitle)
-                        .bold()
-                        .multilineTextAlignment(.center)
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(word)
+                            .font(.largeTitle)
+                            .bold()
+                            .multilineTextAlignment(.center)
+
+                        Button {
+                            pronounceWord()
+                        } label: {
+                            if pronunciationPlayer.isLoading {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "speaker.wave.2.circle.fill")
+                                    .font(.title)
+                            }
+                        }
+                        .disabled(pronunciationPlayer.isLoading)
+                        .accessibilityLabel("Pronounce \(word)")
+                    }
 
                     if let phonetic = displayedPhonetic {
                         Text(phonetic)
@@ -681,6 +790,14 @@ struct WordDefinitionView: View {
         } message: {
             Text(downloadError ?? "")
         }
+        .alert("Pronunciation Unavailable", isPresented: Binding(
+            get: { pronunciationError != nil },
+            set: { if !$0 { pronunciationError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(pronunciationError ?? "")
+        }
         .sheet(isPresented: $showingAddSheet) {
             AddDefinitionView(word: word) { wordType, definition, example, phonetic in
                 addDefinition(wordType: wordType, definition: definition, example: example, phonetic: phonetic)
@@ -721,6 +838,14 @@ struct WordDefinitionView: View {
             )
             entries = result.entries
             currentIndex = result.newIndex
+        }
+    }
+
+    private func pronounceWord() {
+        Task {
+            if let message = await pronunciationPlayer.play(word: word) {
+                pronunciationError = message
+            }
         }
     }
 
