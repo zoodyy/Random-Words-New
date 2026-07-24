@@ -25,6 +25,9 @@ struct EditCSVView: View {
 
     @State private var visibleCount: Int = 0
 
+    @State private var toastMessage: String?
+    @State private var toastID = 0
+
     @Environment(\.dismiss) private var dismiss
 
     enum SortMode: String, CaseIterable {
@@ -80,6 +83,16 @@ struct EditCSVView: View {
                     } label: {
                         Text("Delete CSV File")
                     }
+                }
+            }
+            .overlay(alignment: .top) {
+                if let toastMessage {
+                    Text(toastMessage)
+                        .font(.footnote)
+                        .foregroundColor(.gray)
+                        .padding(.top, 8)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
                 }
             }
             .navigationTitle("\(csvFileName).csv")
@@ -359,6 +372,7 @@ struct EditCSVView: View {
         }
         guard !alreadyExists else {
             newWord = ""
+            showToast("Already in list")
             return
         }
 
@@ -366,6 +380,23 @@ struct EditCSVView: View {
         newWord = ""
         applyCurrentSort()
         saveCSV()
+    }
+
+    private func showToast(_ message: String) {
+        toastID += 1
+        let currentID = toastID
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            toastMessage = message
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            // Only hide if no newer toast has replaced this one.
+            guard toastID == currentID else { return }
+            withAnimation(.easeInOut(duration: 0.3)) {
+                toastMessage = nil
+            }
+        }
     }
 
     private func deleteWords(at offsets: IndexSet) {
