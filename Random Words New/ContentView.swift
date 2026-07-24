@@ -174,7 +174,7 @@ struct ContentView: View {
                     }
                 }
                 .sheet(item: $definitionTarget) { target in
-                    WordDefinitionView(word: target.word)
+                    WordDefinitionView(words: target.words)
                 }
                 .onAppear {
                     syncDefaultWordScreenStyle()
@@ -519,7 +519,7 @@ struct ContentView: View {
     }
     
     private func handleDownSwipe() {
-        guard let word = selectedWords.first else { return }
+        guard !selectedWords.isEmpty else { return }
 
         pauseTimer()
 
@@ -529,7 +529,7 @@ struct ContentView: View {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             swipeUpOffset = 0
-            definitionTarget = DefinitionTarget(word: word)
+            definitionTarget = DefinitionTarget(words: selectedWords)
         }
     }
 

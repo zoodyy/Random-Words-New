@@ -50,8 +50,8 @@ nonisolated struct DictionaryEntry: Identifiable, Sendable {
 }
 
 struct DefinitionTarget: Identifiable {
-    let word: String
-    var id: String { word }
+    let words: [String]
+    var id: String { words.joined(separator: "\u{1}") }
 }
 
 nonisolated enum DefinitionDownloadError: Error {
@@ -569,7 +569,22 @@ final class PronunciationPlayer: ObservableObject {
 }
 
 struct WordDefinitionView: View {
-    let word: String
+    /// The words available to inspect. When more than one is present a picker
+    /// row is shown so the user can switch between them; `selectedWord` tracks
+    /// which one's definitions are currently displayed.
+    let words: [String]
+    @State private var selectedWord: String
+
+    init(word: String) {
+        self.words = [word]
+        _selectedWord = State(initialValue: word)
+    }
+
+    init(words: [String]) {
+        let cleaned = words.isEmpty ? [""] : words
+        self.words = cleaned
+        _selectedWord = State(initialValue: cleaned[0])
+    }
 
     @State private var entries: [DictionaryEntry]?
     @State private var currentIndex = 0
@@ -617,12 +632,45 @@ struct WordDefinitionView: View {
         }
     }
 
+    /// A horizontally-scrollable row of the currently displayed words. Tapping
+    /// one shows its definitions above. Shown only when multiple words are
+    /// displayed.
+    private var wordPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(Array(words.enumerated()), id: \.offset) { _, pickerWord in
+                    let isSelected = pickerWord == selectedWord
+                    Button {
+                        selectedWord = pickerWord
+                    } label: {
+                        Text(pickerWord)
+                            .font(.subheadline)
+                            .fontWeight(isSelected ? .semibold : .regular)
+                            .foregroundColor(isSelected ? .white : .primary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule().fill(
+                                    isSelected
+                                        ? Color.accentColor
+                                        : Color.secondary.opacity(0.15)
+                                )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 24)
+        }
+        .padding(.bottom, 12)
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
                 VStack(spacing: 4) {
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text(word)
+                        Text(selectedWord)
                             .font(.largeTitle)
                             .bold()
                             .multilineTextAlignment(.center)
@@ -644,7 +692,7 @@ struct WordDefinitionView: View {
                                     }
                             }
                             .disabled(pronunciationPlayer.isLoading)
-                            .accessibilityLabel("Pronounce \(word)")
+                            .accessibilityLabel("Pronounce \(selectedWord)")
                         }
                     }
 
@@ -742,6 +790,10 @@ struct WordDefinitionView: View {
                     ProgressView("Loading definitions…")
                     Spacer()
                 }
+
+                if words.count > 1 {
+                    wordPicker
+                }
             }
             .padding(.top, 16)
             .contentShape(Rectangle())
@@ -807,7 +859,7 @@ struct WordDefinitionView: View {
             Text(pronunciationError ?? "")
         }
         .sheet(isPresented: $showingAddSheet) {
-            AddDefinitionView(word: word) { wordType, definition, example, phonetic in
+            AddDefinitionView(word: selectedWord) { wordType, definition, example, phonetic in
                 addDefinition(wordType: wordType, definition: definition, example: example, phonetic: phonetic)
             }
         }
@@ -817,10 +869,17 @@ struct WordDefinitionView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Are you sure you want to delete this definition of \"\(word)\"?")
+            Text("Are you sure you want to delete this definition of \"\(selectedWord)\"?")
         }
-        .task {
-            let loaded = await EnglishDictionaryStore.shared.definitions(for: word)
+        .task(id: selectedWord) {
+            // Reset per-word state so switching words in the picker doesn't
+            // briefly show the previous word's definitions or audio button.
+            entries = nil
+            currentIndex = 0
+            hasPronunciationAudio = false
+            autoDownloadFailed = false
+
+            let loaded = await EnglishDictionaryStore.shared.definitions(for: selectedWord)
             entries = loaded
             // When an auto-download runs it primes the audio cache, so let its
             // completion refresh availability; otherwise resolve it here.
@@ -845,7 +904,7 @@ struct WordDefinitionView: View {
     private func addDefinition(wordType: String, definition: String, example: String, phonetic: String) {
         Task {
             let result = await EnglishDictionaryStore.shared.addUserDefinition(
-                word: word,
+                word: selectedWord,
                 wordType: wordType,
                 definition: definition,
                 example: example,
@@ -860,13 +919,13 @@ struct WordDefinitionView: View {
     /// only shown when something can actually be pronounced. Uses the in-memory
     /// cache when available, otherwise resolves the URL from the API once.
     private func refreshPronunciationAvailability() async {
-        let audioURL = try? await EnglishDictionaryStore.shared.pronunciationAudioURL(for: word)
+        let audioURL = try? await EnglishDictionaryStore.shared.pronunciationAudioURL(for: selectedWord)
         hasPronunciationAudio = (audioURL ?? nil) != nil
     }
 
     private func pronounceWord() {
         Task {
-            if let message = await pronunciationPlayer.play(word: word) {
+            if let message = await pronunciationPlayer.play(word: selectedWord) {
                 pronunciationError = message
             }
         }
@@ -876,7 +935,7 @@ struct WordDefinitionView: View {
         guard let entry = currentEntry, entry.isDeletable else { return }
 
         Task {
-            let updated = await EnglishDictionaryStore.shared.deleteDefinition(id: entry.id, word: word)
+            let updated = await EnglishDictionaryStore.shared.deleteDefinition(id: entry.id, word: selectedWord)
             entries = updated
             currentIndex = min(currentIndex, max(updated.count - 1, 0))
         }
@@ -888,7 +947,7 @@ struct WordDefinitionView: View {
 
         Task {
             do {
-                let updated = try await EnglishDictionaryStore.shared.downloadDefinitions(for: word)
+                let updated = try await EnglishDictionaryStore.shared.downloadDefinitions(for: selectedWord)
                 entries = updated
                 if !automatically {
                     currentIndex = updated.firstIndex { $0.source == .downloaded } ?? 0
@@ -900,7 +959,7 @@ struct WordDefinitionView: View {
                 if automatically {
                     autoDownloadFailed = true
                 } else {
-                    downloadError = "No definitions found online for \"\(word)\"."
+                    downloadError = "No definitions found online for \"\(selectedWord)\"."
                 }
             } catch {
                 if automatically {
