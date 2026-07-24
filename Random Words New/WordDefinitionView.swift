@@ -629,12 +629,17 @@ struct WordDefinitionView: View {
                         Button {
                             pronounceWord()
                         } label: {
-                            if pronunciationPlayer.isLoading {
-                                ProgressView()
-                            } else {
-                                Image(systemName: "speaker.wave.2.circle.fill")
-                                    .font(.title)
-                            }
+                            // Keep the icon in the layout (just hidden) while
+                            // loading so its baseline/size stay fixed and the
+                            // spinner sits exactly where the icon was.
+                            Image(systemName: "speaker.wave.2.circle.fill")
+                                .font(.title)
+                                .opacity(pronunciationPlayer.isLoading ? 0 : 1)
+                                .overlay {
+                                    if pronunciationPlayer.isLoading {
+                                        ProgressView()
+                                    }
+                                }
                         }
                         .disabled(pronunciationPlayer.isLoading)
                         .accessibilityLabel("Pronounce \(word)")
