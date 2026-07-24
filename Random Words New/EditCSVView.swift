@@ -28,6 +28,9 @@ struct EditCSVView: View {
     @State private var toastMessage: String?
     @State private var toastID = 0
 
+    @State private var pendingUndo: [(index: Int, word: String)]?
+    @State private var undoToastID = 0
+
     @Environment(\.dismiss) private var dismiss
 
     enum SortMode: String, CaseIterable {
@@ -86,7 +89,21 @@ struct EditCSVView: View {
                 }
             }
             .overlay(alignment: .top) {
-                if let toastMessage {
+                if pendingUndo != nil {
+                    HStack(spacing: 6) {
+                        Text("Word deleted")
+                            .font(.footnote)
+                            .foregroundColor(.gray)
+                        Button("Undo") {
+                            undoDelete()
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .buttonStyle(.plain)
+                        .foregroundColor(.accentColor)
+                    }
+                    .padding(.top, 8)
+                    .transition(.opacity)
+                } else if let toastMessage {
                     Text(toastMessage)
                         .font(.footnote)
                         .foregroundColor(.gray)
@@ -376,6 +393,10 @@ struct EditCSVView: View {
             return
         }
 
+        // Adding a word invalidates the stale delete positions.
+        undoToastID += 1
+        pendingUndo = nil
+
         originalOrder.append(trimmed)
         newWord = ""
         applyCurrentSort()
@@ -383,6 +404,10 @@ struct EditCSVView: View {
     }
 
     private func showToast(_ message: String) {
+        // A regular toast supersedes any pending undo.
+        undoToastID += 1
+        pendingUndo = nil
+
         toastID += 1
         let currentID = toastID
 
@@ -407,10 +432,52 @@ struct EditCSVView: View {
             }
             .sorted(by: >)
 
+        var removed: [(index: Int, word: String)] = []
         for index in originalIndicesToRemove {
             if originalOrder.indices.contains(index) {
-                originalOrder.remove(at: index)
+                let word = originalOrder.remove(at: index)
+                removed.append((index, word))
             }
+        }
+
+        applyCurrentSort(keepVisibleCount: true)
+        saveCSV()
+
+        showUndoToast(removed)
+    }
+
+    private func showUndoToast(_ removed: [(index: Int, word: String)]) {
+        guard !removed.isEmpty else { return }
+
+        undoToastID += 1
+        let currentID = undoToastID
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            pendingUndo = removed
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            // Only hide if no newer undo toast has replaced this one.
+            guard undoToastID == currentID else { return }
+            withAnimation(.easeInOut(duration: 0.3)) {
+                pendingUndo = nil
+            }
+        }
+    }
+
+    private func undoDelete() {
+        guard let removed = pendingUndo else { return }
+
+        // Reinsert in ascending index order so each word lands back
+        // at the exact position it was removed from.
+        for (index, word) in removed.sorted(by: { $0.index < $1.index }) {
+            let insertIndex = min(index, originalOrder.count)
+            originalOrder.insert(word, at: insertIndex)
+        }
+
+        undoToastID += 1
+        withAnimation(.easeInOut(duration: 0.2)) {
+            pendingUndo = nil
         }
 
         applyCurrentSort(keepVisibleCount: true)
