@@ -58,6 +58,7 @@ struct ContentView: View {
     @AppStorage(WordVisualKeys.timerPosition) private var timerIndicatorPositionRaw: String = WordVisualDefaults.timerPosition
     @AppStorage(WordVisualKeys.timerColor) private var timerIndicatorColorRaw: String = WordVisualDefaults.timerColor
     @AppStorage(WordVisualKeys.sideMargin) private var wordSideMargin: Double = WordVisualDefaults.sideMargin
+    @AppStorage(WordVisualKeys.letterSpacing) private var wordLetterSpacing: Double = WordVisualDefaults.letterSpacing
     @AppStorage(WordVisualKeys.userCustomised) private var wordScreenCustomised: Bool = false
 
     /// The scheme the window is actually rendered in. With a Light/Dark theme
@@ -287,6 +288,7 @@ struct ContentView: View {
                                         Text(makeBreakableText(word))
                                             .font(wordFont(size: baseFontSize * minScale))
                                             .bold()
+                                            .tracking(wordLetterSpacing)
                                             .foregroundColor(getTextColor)
                                             .multilineTextAlignment(.center)
                                             .lineLimit(nil)
@@ -295,6 +297,7 @@ struct ContentView: View {
                                         Text(word)
                                             .font(wordFont(size: baseFontSize))
                                             .bold()
+                                            .tracking(wordLetterSpacing)
                                             .foregroundColor(getTextColor)
                                             .minimumScaleFactor(minScale)
                                             .lineLimit(1)

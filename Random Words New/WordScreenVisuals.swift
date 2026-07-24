@@ -162,6 +162,8 @@ enum WordVisualKeys {
     static let timerColor      = "word_timerColor"
     /// Empty space kept on the left and right of the words, in points.
     static let sideMargin      = "word_sideMargin"
+    /// Extra spacing between the letters of a word, in points.
+    static let letterSpacing   = "word_letterSpacing"
     /// True once the user has touched anything on the customise screen. While
     /// false, the word screen silently follows the standard Light/Dark preset
     /// for the current appearance.
@@ -178,6 +180,7 @@ enum WordVisualDefaults {
     static let timerPosition   = TimerIndicatorPosition.bottom.rawValue
     static let timerColor      = ""
     static let sideMargin: Double = 0
+    static let letterSpacing: Double = 0
 }
 
 enum WordScreenStyle {
@@ -419,6 +422,7 @@ struct CustomiseWordScreenView: View {
     @AppStorage(WordVisualKeys.timerPosition)   private var timerPosition   = WordVisualDefaults.timerPosition
     @AppStorage(WordVisualKeys.timerColor)      private var timerColor      = WordVisualDefaults.timerColor
     @AppStorage(WordVisualKeys.sideMargin)      private var sideMargin      = WordVisualDefaults.sideMargin
+    @AppStorage(WordVisualKeys.letterSpacing)   private var letterSpacing   = WordVisualDefaults.letterSpacing
     @AppStorage(WordVisualKeys.userCustomised)  private var userCustomised  = false
     @AppStorage("selectedWordFont")             private var selectedWordFontRaw = "American Typewriter"
 
@@ -506,6 +510,22 @@ struct CustomiseWordScreenView: View {
                 Text("Side Margins")
             } footer: {
                 Text("Empty space kept on the left and right of the words.")
+            }
+
+            // Like the side margin, letter spacing isn't part of the light/dark
+            // presets, so changing it doesn't mark the screen as customised.
+            Section {
+                HStack {
+                    Slider(value: $letterSpacing, in: 0...30, step: 1)
+                    Text("\(Int(letterSpacing))")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 32, alignment: .trailing)
+                }
+            } header: {
+                Text("Letter Spacing")
+            } footer: {
+                Text("Extra space kept between the letters of a word.")
             }
 
             Section {
@@ -660,6 +680,7 @@ struct CustomiseWordScreenView: View {
                 Text(word)
                     .font(wordDisplayFont(named: selectedWordFontRaw, size: height * 0.16))
                     .bold()
+                    .tracking(letterSpacing)
                     .foregroundColor(WordScreenStyle.resolvedTextColor(textColor))
                     .lineLimit(1)
                     .minimumScaleFactor(0.2)
