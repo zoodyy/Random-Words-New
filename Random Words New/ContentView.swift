@@ -599,20 +599,29 @@ struct ContentView: View {
     }
 
     /// Fling the word off screen, then perform the action and slide the new word
-    /// in from the same side.
-    private func commitSwipe(to offset: CGSize, then action: @escaping () -> Void) {
+    /// in from `entry` — by default the same side the old word left towards.
+    private func commitSwipe(to exit: CGSize,
+                             entering entry: CGSize? = nil,
+                             then action: @escaping () -> Void) {
         isCommittingSwipe = true
 
         withAnimation(.easeInOut(duration: 0.25)) {
-            dragOffset = offset
+            dragOffset = exit
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             action()
-            withAnimation(.easeOut(duration: 0.2)) {
-                dragOffset = .zero
+            // Park the incoming word off screen where it should enter from...
+            dragOffset = entry ?? exit
+
+            // ...and travel to the centre on the next turn of the run loop, so
+            // that starting position is rendered before the animation begins.
+            DispatchQueue.main.async {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    dragOffset = .zero
+                }
+                isCommittingSwipe = false
             }
-            isCommittingSwipe = false
         }
     }
 
@@ -631,7 +640,10 @@ struct ContentView: View {
         pauseTimer()
         guard !wordHistory.isEmpty, historyIndex > 0 else { return releaseWord() }
 
-        commitSwipe(to: CGSize(width: horizontalFlyOut, height: dragOffset.height)) {
+        // Going back through history reads as a filmstrip: the current word
+        // leaves to the right and the previous one follows it in from the left.
+        commitSwipe(to: CGSize(width: horizontalFlyOut, height: dragOffset.height),
+                    entering: CGSize(width: -horizontalFlyOut, height: 0)) {
             historyIndex -= 1
             selectedWords = wordHistory[historyIndex]
             saveHistoryState()
