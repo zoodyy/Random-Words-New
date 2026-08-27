@@ -86,8 +86,17 @@ struct ContentView: View {
     @State private var totalEligibleWordCount: Int = 0
     @State private var firstSelectedWordSourceCSV: String?
     
-    @State private var swipeOffset: CGFloat = 0
-    @State private var swipeUpOffset: CGFloat = 0
+    /// How far the word is currently displaced from its resting place: the live
+    /// finger translation while dragging, then the fly-out while a swipe commits.
+    @State private var dragOffset: CGSize = .zero
+    @State private var isDraggingWord = false
+    /// The direction the current drag would trigger if the finger lifted now.
+    @State private var armedSwipeDirection: WordSwipeDirection?
+    /// True from the moment a swipe is committed until the word has flown off
+    /// and been replaced, so a stray touch can't fight the exit animation.
+    @State private var isCommittingSwipe = false
+    /// Size of the word screen, used to detect a release on a screen edge.
+    @State private var wordScreenSize: CGSize = .zero
     @State private var longPressTimer: Timer?
     
     @GestureState private var isPressing = false
@@ -108,22 +117,106 @@ struct ContentView: View {
     @State private var isRestoringState = false
     
     private let maxHistoryCount: Int = 100
-    
+
+    /// Coordinate space of the word screen, so a drag's release point can be
+    /// compared against the screen edges.
+    private static let wordScreenSpace = "wordScreen"
+    /// How far the finger must travel, or be flung, for a release to count.
+    private static let swipeThreshold: CGFloat = 100
+    /// A release this close to a screen edge counts as a swipe that way no
+    /// matter how far the finger actually travelled.
+    private static let edgeReleaseInset: CGFloat = 32
+
+    /// Drag the word around with the finger; on release either commit to one of
+    /// the four actions or let the word spring back.
     private var swipeGesture: some Gesture {
-        DragGesture()
-            .onEnded { value in
-                if value.translation.width < -100 {
-                    handleLeftSwipe()
-                } else if value.translation.width > 100 {
-                    handleRightSwipe()
+        DragGesture(minimumDistance: 10, coordinateSpace: .named(Self.wordScreenSpace))
+            .onChanged { value in
+                guard !isCommittingSwipe else { return }
+
+                if !isDraggingWord {
+                    withAnimation(.easeOut(duration: 0.15)) { isDraggingWord = true }
                 }
-                
-                if value.translation.height < -100 {
-                    handleUpSwipe()
-                } else if value.translation.height > 100 {
-                    handleDownSwipe()
+                // Deliberately unanimated: the word tracks the finger 1:1.
+                dragOffset = value.translation
+                armedSwipeDirection = releaseDirection(for: value)
+            }
+            .onEnded { value in
+                withAnimation(.easeOut(duration: 0.15)) { isDraggingWord = false }
+                armedSwipeDirection = nil
+                guard !isCommittingSwipe else { return }
+
+                switch committedDirection(for: value) {
+                case .left?:  handleLeftSwipe()
+                case .right?: handleRightSwipe()
+                case .up?:    handleUpSwipe()
+                case .down?:  handleDownSwipe()
+                case nil:     releaseWord()
                 }
             }
+    }
+
+    /// The direction a release right here would trigger, judged on where the
+    /// finger actually is: far enough along an axis, or on a screen edge.
+    private func releaseDirection(for value: DragGesture.Value) -> WordSwipeDirection? {
+        if let edge = edgeReleaseDirection(for: value) { return edge }
+        return dominantDirection(of: value.translation, atLeast: Self.swipeThreshold)
+    }
+
+    private func committedDirection(for value: DragGesture.Value) -> WordSwipeDirection? {
+        if let direction = releaseDirection(for: value) { return direction }
+        // Quick flick: `predictedEndTranslation` folds in the lift-off velocity,
+        // so a short but fast swipe commits just like a long slow drag.
+        return dominantDirection(of: value.predictedEndTranslation, atLeast: Self.swipeThreshold)
+    }
+
+    private func dominantDirection(of translation: CGSize, atLeast threshold: CGFloat) -> WordSwipeDirection? {
+        guard max(abs(translation.width), abs(translation.height)) >= threshold else { return nil }
+
+        if abs(translation.width) >= abs(translation.height) {
+            return translation.width < 0 ? .left : .right
+        }
+        return translation.height < 0 ? .up : .down
+    }
+
+    /// A drag that wanders around still counts as a swipe when the finger is
+    /// lifted on the edge of the screen it was heading for.
+    private func edgeReleaseDirection(for value: DragGesture.Value) -> WordSwipeDirection? {
+        guard wordScreenSize.width > 0, wordScreenSize.height > 0 else { return nil }
+
+        let inset = Self.edgeReleaseInset
+        let location = value.location
+        let translation = value.translation
+
+        // Only edges the finger actually moved towards, so starting a drag next
+        // to an edge and barely moving doesn't trigger anything.
+        var directions: [WordSwipeDirection] = []
+        if location.x <= inset, translation.width < 0 { directions.append(.left) }
+        if location.x >= wordScreenSize.width - inset, translation.width > 0 { directions.append(.right) }
+        if location.y <= inset, translation.height < 0 { directions.append(.up) }
+        if location.y >= wordScreenSize.height - inset, translation.height > 0 { directions.append(.down) }
+
+        guard directions.count > 1 else { return directions.first }
+
+        // Released in a corner: go with the axis the finger travelled furthest along.
+        let horizontal = abs(translation.width) >= abs(translation.height)
+        return directions.first { $0.isHorizontal == horizontal } ?? directions.first
+    }
+
+    /// Directions that would do nothing if swiped right now, so the hint can
+    /// dim them.
+    private var unavailableSwipeDirections: Set<WordSwipeDirection> {
+        var unavailable: Set<WordSwipeDirection> = []
+        if selectedWords.isEmpty {
+            unavailable.formUnion([.left, .up, .down])
+        }
+        if wordHistory.isEmpty || historyIndex <= 0 {
+            unavailable.insert(.right)
+        }
+        if firstSelectedWordSourceCSV == nil {
+            unavailable.insert(.up)
+        }
+        return unavailable
     }
     
     private var selectedTheme: AppTheme {
@@ -337,9 +430,7 @@ struct ContentView: View {
                                 )
                             }
                         }
-                        .offset(x: swipeOffset, y: swipeUpOffset)
-                        .animation(.easeInOut(duration: 0.25), value: swipeOffset)
-                        .animation(.easeInOut(duration: 0.25), value: swipeUpOffset)
+                        .offset(x: dragOffset.width, y: dragOffset.height)
                     }
                     .padding(.horizontal, wordSideMargin)
                 }
@@ -363,6 +454,8 @@ struct ContentView: View {
             }
             .allowsHitTesting(false)
 
+            swipeHintOverlay
+
             timerIndicatorOverlay
         }
         .contentShape(Rectangle())
@@ -370,6 +463,29 @@ struct ContentView: View {
         .onTapGesture {
             guard hasAvailableWords else { return }
             selectRandomWords(recordHistory: true)
+        }
+        .coordinateSpace(.named(Self.wordScreenSpace))
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { wordScreenSize = $0 }
+    }
+
+    /// While the word is held, the four swipe actions are spelled out in the
+    /// empty space above where the word normally sits.
+    @ViewBuilder
+    private var swipeHintOverlay: some View {
+        if isDraggingWord {
+            VStack {
+                WordSwipeCompass(
+                    activeDirection: armedSwipeDirection,
+                    unavailable: unavailableSwipeDirections,
+                    color: WordScreenStyle.resolvedTextColor(wordTextColorRaw),
+                    background: WordScreenStyle.resolvedBackground(wordBackgroundColorRaw)
+                )
+                .padding(.top, 40)
+
+                Spacer()
+            }
+            .allowsHitTesting(false)
+            .transition(.opacity)
         }
     }
     
@@ -466,69 +582,80 @@ struct ContentView: View {
         }
     }
 
+    /// Far enough that the word is off screen before its replacement arrives.
+    private var horizontalFlyOut: CGFloat {
+        max(wordScreenSize.width, 500)
+    }
+
+    private var verticalFlyOut: CGFloat {
+        max(wordScreenSize.height * 0.8, 400)
+    }
+
+    /// No action: let the word settle back where it came from.
+    private func releaseWord() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+            dragOffset = .zero
+        }
+    }
+
+    /// Fling the word off screen, then perform the action and slide the new word
+    /// in from the same side.
+    private func commitSwipe(to offset: CGSize, then action: @escaping () -> Void) {
+        isCommittingSwipe = true
+
+        withAnimation(.easeInOut(duration: 0.25)) {
+            dragOffset = offset
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            action()
+            withAnimation(.easeOut(duration: 0.2)) {
+                dragOffset = .zero
+            }
+            isCommittingSwipe = false
+        }
+    }
+
     private func handleLeftSwipe() {
         pauseTimer()
-        guard !selectedWords.isEmpty else { return }
-        
-        withAnimation {
-            swipeOffset = -500
-        }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+        guard !selectedWords.isEmpty else { return releaseWord() }
+
+        commitSwipe(to: CGSize(width: -horizontalFlyOut, height: dragOffset.height)) {
             addToOwnVocab(selectedWords)
             showToast(selectedWords.count == 1 ? "Added word to ownVocab" : "Added words to ownVocab")
             selectRandomWords(recordHistory: true)
-            swipeOffset = 0
         }
     }
     
     private func handleRightSwipe() {
         pauseTimer()
-        guard !wordHistory.isEmpty, historyIndex > 0 else { return }
-        
-        withAnimation {
-            swipeOffset = 500
-        }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+        guard !wordHistory.isEmpty, historyIndex > 0 else { return releaseWord() }
+
+        commitSwipe(to: CGSize(width: horizontalFlyOut, height: dragOffset.height)) {
             historyIndex -= 1
             selectedWords = wordHistory[historyIndex]
-            swipeOffset = 0
             saveHistoryState()
         }
     }
     
     private func handleUpSwipe() {
-        guard let word = selectedWords.first else { return }
-        
+        guard let word = selectedWords.first,
+              let csv = firstSelectedWordSourceCSV else { return releaseWord() }
+
         pauseTimer()
-        
-        withAnimation(.easeInOut(duration: 0.25)) {
-            swipeUpOffset = -400
-        }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            if let csv = firstSelectedWordSourceCSV {
-                selectedWordSource = (csv, word)
-                swipeUpOffset = 0
-                navigateToCSV = csv
-            } else {
-                swipeUpOffset = 0
-            }
+
+        commitSwipe(to: CGSize(width: dragOffset.width, height: -verticalFlyOut)) {
+            selectedWordSource = (csv, word)
+            navigateToCSV = csv
         }
     }
     
     private func handleDownSwipe() {
-        guard !selectedWords.isEmpty else { return }
+        guard !selectedWords.isEmpty else { return releaseWord() }
 
         pauseTimer()
 
-        withAnimation(.easeInOut(duration: 0.25)) {
-            swipeUpOffset = 400
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            swipeUpOffset = 0
+        commitSwipe(to: CGSize(width: dragOffset.width, height: verticalFlyOut)) {
             definitionTarget = DefinitionTarget(words: selectedWords)
         }
     }
