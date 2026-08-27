@@ -71,6 +71,9 @@ actor EnglishDictionaryStore {
     // The optional value distinguishes "known to have no audio" from "unknown".
     private var pronunciationURLCache: [String: URL?] = [:]
 
+    /// How many times a definition download is attempted before giving up.
+    private static let downloadAttemptLimit = 5
+
     func definitions(for word: String) -> [DictionaryEntry] {
         let key = word.lowercased()
 
@@ -196,7 +199,11 @@ actor EnglishDictionaryStore {
         }
     }
 
-    func downloadDefinitions(for word: String) async throws -> [DictionaryEntry] {
+    /// Performs a single dictionary API request for `word`. Throws `.notFound`
+    /// when the online dictionary has no entry for the word — a permanent
+    /// answer — and `.badResponse` for anything else, which the retry wrapper
+    /// treats as transient.
+    private func fetchAPIEntries(for word: String) async throws -> [APIEntry] {
         guard let encodedWord = word.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let url = URL(string: "https://api.dictionaryapi.dev/api/v2/entries/en/\(encodedWord)") else {
             throw DefinitionDownloadError.notFound
@@ -214,7 +221,45 @@ actor EnglishDictionaryStore {
             throw DefinitionDownloadError.badResponse
         }
 
-        let apiEntries = try JSONDecoder().decode([APIEntry].self, from: data)
+        return try JSONDecoder().decode([APIEntry].self, from: data)
+    }
+
+    /// Retries `attempt` on transient failures — a dropped connection, a server
+    /// error, a garbled response — so a flaky network doesn't surface as a
+    /// failed download. The retries are invisible to the caller, which keeps
+    /// showing its loading indicator until they're exhausted.
+    ///
+    /// `.notFound` means the dictionary genuinely has no entry for the word, so
+    /// it's reported straight away; cancellation is likewise never retried.
+    private func withDownloadRetries<T>(_ attempt: () async throws -> T) async throws -> T {
+        var lastError: Error = DefinitionDownloadError.badResponse
+
+        for attemptNumber in 1...Self.downloadAttemptLimit {
+            do {
+                return try await attempt()
+            } catch DefinitionDownloadError.notFound {
+                throw DefinitionDownloadError.notFound
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as URLError where error.code == .cancelled {
+                throw error
+            } catch {
+                lastError = error
+                guard attemptNumber < Self.downloadAttemptLimit else { break }
+                // Back off 0.5s, 1s, 2s, 2s between attempts. Sleeping throws
+                // if the task is cancelled meanwhile, which ends the retries.
+                let delay = min(0.5 * Double(1 << (attemptNumber - 1)), 2)
+                try await Task.sleep(for: .seconds(delay))
+            }
+        }
+
+        throw lastError
+    }
+
+    func downloadDefinitions(for word: String) async throws -> [DictionaryEntry] {
+        let apiEntries = try await withDownloadRetries {
+            try await fetchAPIEntries(for: word)
+        }
 
         // Remember the pronunciation URL from this same response (in memory
         // only) so tapping the speaker button doesn't hit the API again.
