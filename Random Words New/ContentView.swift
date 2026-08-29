@@ -97,6 +97,14 @@ struct ContentView: View {
     @State private var isCommittingSwipe = false
     /// Size of the word screen, used to detect a release on a screen edge.
     @State private var wordScreenSize: CGSize = .zero
+    /// Whether playback was running when the current touch started. Any touch
+    /// on the word holds playback for as long as it lasts; only a quick tap
+    /// changes it for good, so every other outcome puts this state back.
+    @State private var wasTimerRunningBeforeTouch: Bool?
+    /// Playback state from before the definition sheet was opened. The word
+    /// screen stays alive behind the sheet, so playback is held until dismissal
+    /// instead of letting the word being looked up switch out.
+    @State private var wasTimerRunningBeforeDefinition = false
     @State private var longPressTimer: Timer?
     
     @GestureState private var isPressing = false
@@ -135,6 +143,7 @@ struct ContentView: View {
                 guard !isCommittingSwipe else { return }
 
                 if !isDraggingWord {
+                    beginTouchPause()
                     withAnimation(.easeOut(duration: 0.15)) { isDraggingWord = true }
                 }
                 // Deliberately unanimated: the word tracks the finger 1:1.
@@ -144,6 +153,9 @@ struct ContentView: View {
             .onEnded { value in
                 withAnimation(.easeOut(duration: 0.15)) { isDraggingWord = false }
                 armedSwipeDirection = nil
+                // A drag only held playback while the finger was down, whether
+                // or not it ends up committing a swipe.
+                restoreTimerAfterTouch()
                 guard !isCommittingSwipe else { return }
 
                 switch committedDirection(for: value) {
@@ -266,7 +278,12 @@ struct ContentView: View {
                         )
                     }
                 }
-                .sheet(item: $definitionTarget) { target in
+                .sheet(item: $definitionTarget, onDismiss: {
+                    if wasTimerRunningBeforeDefinition {
+                        wasTimerRunningBeforeDefinition = false
+                        resumeTimer()
+                    }
+                }) { target in
                     WordDefinitionView(words: target.words)
                 }
                 .onAppear {
@@ -413,20 +430,22 @@ struct ContentView: View {
                                             gestureState = currentState
                                         }
                                         .onChanged { _ in
-                                            if timer == nil {
-                                                resumeTimer()
-                                            } else {
-                                                pauseTimer()
-                                            }
+                                            // Touch down: hold playback until
+                                            // the touch turns out to be a tap,
+                                            // a drag or a long press.
+                                            beginTouchPause()
                                         }
                                         .onEnded { _ in
-                                            resumeTimer()
-                                            
+                                            restoreTimerAfterTouch()
+
                                             UIPasteboard.general.string = word
                                             showToast("Copied")
                                             let generator = UIImpactFeedbackGenerator(style: .medium)
                                             generator.impactOccurred()
                                         }
+                                )
+                                .simultaneousGesture(
+                                    TapGesture().onEnded { toggleTimerAfterTap() }
                                 )
                             }
                         }
@@ -626,7 +645,6 @@ struct ContentView: View {
     }
 
     private func handleLeftSwipe() {
-        pauseTimer()
         guard !selectedWords.isEmpty else { return releaseWord() }
 
         commitSwipe(to: CGSize(width: -horizontalFlyOut, height: dragOffset.height)) {
@@ -637,7 +655,6 @@ struct ContentView: View {
     }
     
     private func handleRightSwipe() {
-        pauseTimer()
         guard !wordHistory.isEmpty, historyIndex > 0 else { return releaseWord() }
 
         // Going back through history reads as a filmstrip: the current word
@@ -654,8 +671,6 @@ struct ContentView: View {
         guard let word = selectedWords.first,
               let csv = firstSelectedWordSourceCSV else { return releaseWord() }
 
-        pauseTimer()
-
         commitSwipe(to: CGSize(width: dragOffset.width, height: -verticalFlyOut)) {
             selectedWordSource = (csv, word)
             navigateToCSV = csv
@@ -665,9 +680,11 @@ struct ContentView: View {
     private func handleDownSwipe() {
         guard !selectedWords.isEmpty else { return releaseWord() }
 
-        pauseTimer()
-
         commitSwipe(to: CGSize(width: dragOffset.width, height: verticalFlyOut)) {
+            // Unlike the other swipes this one doesn't leave the screen, so
+            // hold playback here and pick it back up when the sheet closes.
+            wasTimerRunningBeforeDefinition = timer != nil
+            pauseTimer()
             definitionTarget = DefinitionTarget(words: selectedWords)
         }
     }
@@ -992,6 +1009,32 @@ struct ContentView: View {
         if switchInterval > 0 {
             updateTimer()
         }
+    }
+
+    /// Hold playback for as long as a touch on the word lasts, remembering
+    /// whether it was running so the state can be put back afterwards.
+    private func beginTouchPause() {
+        if wasTimerRunningBeforeTouch == nil {
+            wasTimerRunningBeforeTouch = timer != nil
+        }
+        pauseTimer()
+    }
+
+    /// Put playback back the way it was before the touch started. Used for
+    /// everything that isn't a quick tap: drags, swipes and long presses.
+    private func restoreTimerAfterTouch() {
+        guard let wasRunning = wasTimerRunningBeforeTouch else { return }
+        wasTimerRunningBeforeTouch = nil
+        if wasRunning { resumeTimer() }
+    }
+
+    /// A quick tap is the only gesture that changes playback for good. The
+    /// touch already paused it, so a tap that started while playing simply
+    /// stays paused and one that started while paused resumes.
+    private func toggleTimerAfterTap() {
+        guard let wasRunning = wasTimerRunningBeforeTouch else { return }
+        wasTimerRunningBeforeTouch = nil
+        if !wasRunning { resumeTimer() }
     }
     
     private var getTextColor: Color {
