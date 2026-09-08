@@ -64,6 +64,7 @@ struct ContentView: View {
     /// The scheme the window is actually rendered in. With a Light/Dark theme
     /// override this reflects the override; on "System" it's the device setting.
     @Environment(\.colorScheme) private var renderedColorScheme
+    @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("selectedCSVsData") private var selectedCSVsData: Data = Data()
     @AppStorage("csvRangesData") private var csvRangesData: Data = Data()
@@ -134,13 +135,16 @@ struct ContentView: View {
     /// A release this close to a screen edge counts as a swipe that way no
     /// matter how far the finger actually travelled.
     private static let edgeReleaseInset: CGFloat = 32
+    /// The strip along the bottom of the screen that iOS keeps for its own
+    /// home indicator gestures.
+    private static let systemGestureInset: CGFloat = 40
 
     /// Drag the word around with the finger; on release either commit to one of
     /// the four actions or let the word spring back.
     private var swipeGesture: some Gesture {
         DragGesture(minimumDistance: 10, coordinateSpace: .named(Self.wordScreenSpace))
             .onChanged { value in
-                guard !isCommittingSwipe else { return }
+                guard !isCommittingSwipe, !isSystemGestureTouch(value) else { return }
 
                 if !isDraggingWord {
                     beginTouchPause()
@@ -151,6 +155,8 @@ struct ContentView: View {
                 armedSwipeDirection = releaseDirection(for: value)
             }
             .onEnded { value in
+                guard !isSystemGestureTouch(value) else { return }
+
                 withAnimation(.easeOut(duration: 0.15)) { isDraggingWord = false }
                 armedSwipeDirection = nil
                 // A drag only held playback while the finger was down, whether
@@ -166,6 +172,30 @@ struct ContentView: View {
                 case nil:     releaseWord()
                 }
             }
+    }
+
+    /// A touch that starts in the bottom strip belongs to the iPhone, not to
+    /// the word: that's where swiping up goes home or opens the app switcher.
+    /// iOS takes those touches over part-way through without ever ending the
+    /// drag, so the word ignores them outright rather than trailing the finger
+    /// off centre and staying there.
+    private func isSystemGestureTouch(_ value: DragGesture.Value) -> Bool {
+        guard wordScreenSize.height > 0 else { return false }
+        return value.startLocation.y >= wordScreenSize.height - Self.systemGestureInset
+    }
+
+    /// Put the word back where it belongs when the app stops being the active
+    /// one, in case a touch was still in flight — a system gesture that steals
+    /// one leaves the drag hanging, with no end to restore anything from.
+    private func cancelActiveDrag() {
+        guard isDraggingWord || wasTimerRunningBeforeTouch != nil else { return }
+
+        isDraggingWord = false
+        armedSwipeDirection = nil
+        if !isCommittingSwipe {
+            dragOffset = .zero
+        }
+        restoreTimerAfterTouch()
     }
 
     /// The direction a release right here would trigger, judged on where the
@@ -360,6 +390,11 @@ struct ContentView: View {
                 }
                 .onChange(of: renderedColorScheme) { _ in
                     syncDefaultWordScreenStyle()
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    if newPhase != .active {
+                        cancelActiveDrag()
+                    }
                 }
         }
         .preferredColorScheme(colorScheme)
