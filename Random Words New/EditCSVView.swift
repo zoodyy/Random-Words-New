@@ -23,7 +23,15 @@ struct EditCSVView: View {
     @State private var showingDeleteConfirmation = false
     @State private var wasDeleted = false
 
-    @State private var visibleCount: Int = 0
+    // Only a window of rows is handed to the List. Rendering every row up to
+    // the jump target made opening a big list take seconds (see focusRequestedWord).
+    @State private var windowStart: Int = 0
+    @State private var windowEnd: Int = 0
+
+    @State private var hasLoaded = false
+    @State private var pendingScrollPosition: Int?
+    @State private var isJumpingToWord = false
+    @State private var isExtendingWindowUpwards = false
 
     @State private var toastMessage: String?
     @State private var toastID = 0
@@ -74,7 +82,7 @@ struct EditCSVView: View {
                         editableRow(for: displayedPosition)
                             .id(displayedPosition)
                             .onAppear {
-                                loadMoreIfNeeded(currentDisplayedPosition: displayedPosition)
+                                extendWindowIfNeeded(around: displayedPosition, with: proxy)
                             }
                     }
                     .onDelete(perform: deleteWords)
@@ -167,9 +175,13 @@ struct EditCSVView: View {
                 Text("This will permanently delete this CSV file.")
             }
             .onAppear {
+                guard !hasLoaded else { return }
+                hasLoaded = true
+
                 ensureFileExistsInDocuments()
                 loadCSV()
-                scrollToRequestedWordIfNeeded(with: proxy)
+                focusRequestedWord()
+                scrollToPendingPosition(with: proxy)
             }
             .onDisappear {
                 guard !wasDeleted else { return }
@@ -193,7 +205,7 @@ struct EditCSVView: View {
                     set: { newValue in
                         guard originalOrder.indices.contains(originalIndex) else { return }
                         originalOrder[originalIndex] = newValue
-                        applySearchAndPagination(keepVisibleCount: true)
+                        applySearchAndPagination(keepWindow: true)
                     }
                 )
             )
@@ -210,7 +222,10 @@ struct EditCSVView: View {
     }
 
     private var visibleDisplayedPositions: [Int] {
-        Array(0..<min(visibleCount, currentDisplayedIndices.count))
+        let count = currentDisplayedIndices.count
+        let start = min(windowStart, count)
+        let end = min(max(windowEnd, start), count)
+        return Array(start..<end)
     }
 
     private func originalIndex(forDisplayedPosition displayedPosition: Int) -> Int? {
@@ -253,16 +268,7 @@ struct EditCSVView: View {
     }
 
     private func loadCSV() {
-        let fileURL = getDocumentsURL()
-
-        if let content = try? String(contentsOf: fileURL) {
-            originalOrder = content
-                .components(separatedBy: .newlines)
-                .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        } else {
-            originalOrder = []
-        }
-
+        originalOrder = WordlistFile.words(named: csvFileName)
         applyCurrentSort()
     }
 
@@ -277,7 +283,7 @@ struct EditCSVView: View {
         applyCurrentSort()
     }
 
-    private func applyCurrentSort(keepVisibleCount: Bool = false) {
+    private func applyCurrentSort(keepWindow: Bool = false) {
         switch sortMode {
         case .original:
             displayedIndices = Array(originalOrder.indices)
@@ -296,10 +302,10 @@ struct EditCSVView: View {
             }
         }
 
-        applySearchAndPagination(keepVisibleCount: keepVisibleCount)
+        applySearchAndPagination(keepWindow: keepWindow)
     }
 
-    private func applySearchAndPagination(keepVisibleCount: Bool = false) {
+    private func applySearchAndPagination(keepWindow: Bool = false) {
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if trimmedSearch.isEmpty {
@@ -311,45 +317,106 @@ struct EditCSVView: View {
             }
         }
 
-        if keepVisibleCount {
-            visibleCount = min(max(visibleCount, pageSize), filteredDisplayedIndices.count)
+        if keepWindow {
+            setWindow(start: windowStart, end: max(windowEnd, windowStart + pageSize))
         } else {
-            visibleCount = min(pageSize, filteredDisplayedIndices.count)
+            setWindow(start: 0, end: pageSize)
         }
     }
 
-    private func loadMoreIfNeeded(currentDisplayedPosition: Int) {
-        guard currentDisplayedPosition >= visibleCount - preloadThreshold else { return }
-        guard visibleCount < currentDisplayedIndices.count else { return }
-
-        visibleCount = min(visibleCount + pageSize, currentDisplayedIndices.count)
+    private func setWindow(start: Int, end: Int) {
+        let count = currentDisplayedIndices.count
+        let clampedStart = max(0, min(start, max(count - 1, 0)))
+        windowStart = count == 0 ? 0 : clampedStart
+        windowEnd = min(max(end, windowStart), count)
     }
 
-    private func scrollToRequestedWordIfNeeded(with proxy: ScrollViewProxy) {
-        guard let word = scrollToWord else { return }
+    private func extendWindowIfNeeded(around displayedPosition: Int, with proxy: ScrollViewProxy) {
+        // Rows sliding past during the jump to a swiped-up word are not the user
+        // scrolling, and treating them as such would page the window straight
+        // back to the top of the list.
+        guard !isJumpingToWord else { return }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            guard let originalIndex = originalOrder.firstIndex(of: word),
-                  let displayedPosition = currentDisplayedIndices.firstIndex(of: originalIndex) else {
-                return
-            }
+        let count = currentDisplayedIndices.count
 
-            highlightedOriginalIndex = originalIndex
+        if displayedPosition >= windowEnd - preloadThreshold, windowEnd < count {
+            windowEnd = min(windowEnd + pageSize, count)
+        }
 
-            if displayedPosition >= visibleCount {
-                visibleCount = min(displayedPosition + pageSize, currentDisplayedIndices.count)
-            }
+        guard displayedPosition <= windowStart + preloadThreshold,
+              windowStart > 0,
+              !isExtendingWindowUpwards else {
+            return
+        }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                withAnimation {
-                    proxy.scrollTo(displayedPosition, anchor: .center)
-                }
+        isExtendingWindowUpwards = true
+        windowStart = max(0, windowStart - pageSize)
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                    highlightedOriginalIndex = nil
-                }
+        // The rows just added sit above what the user is reading. Re-anchoring in
+        // the same update keeps that row put — otherwise the list shoves it down
+        // the screen and the rows now on top ask to page up again.
+        proxy.scrollTo(displayedPosition, anchor: .top)
+
+        DispatchQueue.main.async {
+            isExtendingWindowUpwards = false
+        }
+    }
+
+    /// Puts the swiped-up word on screen.
+    ///
+    /// The list only renders a window around the target rather than every row
+    /// leading up to it: a word two thirds of the way into the 84k-line list
+    /// used to hand the List ~58k rows to build, which alone took seconds.
+    private func focusRequestedWord() {
+        guard let word = scrollToWord,
+              let originalIndex = originalOrder.firstIndex(of: word),
+              let displayedPosition = displayedPosition(forOriginalIndex: originalIndex) else {
+            return
+        }
+
+        highlightedOriginalIndex = originalIndex
+        isJumpingToWord = true
+        setWindow(start: displayedPosition - pageSize, end: displayedPosition + pageSize)
+        pendingScrollPosition = displayedPosition
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            highlightedOriginalIndex = nil
+        }
+    }
+
+    private func scrollToPendingPosition(with proxy: ScrollViewProxy) {
+        guard let displayedPosition = pendingScrollPosition else { return }
+        pendingScrollPosition = nil
+
+        // The window was widened a moment ago; let SwiftUI put those rows in the
+        // list before asking it to scroll to one of them.
+        DispatchQueue.main.async {
+            proxy.scrollTo(displayedPosition, anchor: .center)
+            DispatchQueue.main.async {
+                isJumpingToWord = false
             }
         }
+    }
+
+    /// Where a word sits in the list. In CSV order — the only orders a swipe-up
+    /// can land in, since the sort menu resets the window anyway — this is
+    /// arithmetic instead of a scan over every index.
+    private func displayedPosition(forOriginalIndex originalIndex: Int) -> Int? {
+        if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            switch sortMode {
+            case .original:
+                return currentDisplayedIndices.indices.contains(originalIndex) ? originalIndex : nil
+
+            case .reverseOriginal:
+                let position = originalOrder.count - 1 - originalIndex
+                return currentDisplayedIndices.indices.contains(position) ? position : nil
+
+            default:
+                break
+            }
+        }
+
+        return currentDisplayedIndices.firstIndex(of: originalIndex)
     }
 
     private func removeNewestDuplicates() {
@@ -425,8 +492,14 @@ struct EditCSVView: View {
     }
 
     private func deleteWords(at offsets: IndexSet) {
+        // The offsets index the rows the ForEach was handed, which start at
+        // windowStart rather than at 0.
+        let renderedPositions = visibleDisplayedPositions
+
         let originalIndicesToRemove = offsets
-            .compactMap { displayedPosition -> Int? in
+            .compactMap { offset -> Int? in
+                guard renderedPositions.indices.contains(offset) else { return nil }
+                let displayedPosition = renderedPositions[offset]
                 guard currentDisplayedIndices.indices.contains(displayedPosition) else { return nil }
                 return currentDisplayedIndices[displayedPosition]
             }
@@ -440,7 +513,7 @@ struct EditCSVView: View {
             }
         }
 
-        applyCurrentSort(keepVisibleCount: true)
+        applyCurrentSort(keepWindow: true)
         saveCSV()
 
         showUndoToast(removed)
@@ -480,7 +553,7 @@ struct EditCSVView: View {
             pendingUndo = nil
         }
 
-        applyCurrentSort(keepVisibleCount: true)
+        applyCurrentSort(keepWindow: true)
         saveCSV()
     }
 

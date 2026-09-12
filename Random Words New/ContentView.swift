@@ -728,12 +728,8 @@ struct ContentView: View {
         let fileURL = getOwnVocabURL()
         
         var existingOrdered: [String] = []
-        if FileManager.default.fileExists(atPath: fileURL.path),
-           let content = try? String(contentsOf: fileURL) {
-            existingOrdered = content
-                .components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            existingOrdered = WordlistFile.words(at: fileURL)
         }
         
         for word in wordsToAdd {
@@ -909,24 +905,9 @@ struct ContentView: View {
         allWordsPerCSV.removeAll()
         
         for csv in selectedCSVs {
-            let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("\(csv).csv")
-            
-            var content: String?
-            
-            if FileManager.default.fileExists(atPath: documentsURL.path) {
-                content = try? String(contentsOf: documentsURL)
-            } else if let bundleURL = BundledWordlists.url(named: csv) {
-                content = try? String(contentsOf: bundleURL)
-            }
-            
-            if let content = content {
-                let lines = content
-                    .components(separatedBy: .newlines)
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-                
-                allWordsPerCSV[csv] = lines
+            let words = WordlistFile.words(named: csv)
+            if !words.isEmpty {
+                allWordsPerCSV[csv] = words
             }
         }
 

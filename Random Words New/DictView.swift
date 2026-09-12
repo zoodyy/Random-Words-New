@@ -581,17 +581,7 @@ struct DictView: View {
     
     private func refreshPreviewInfo(for file: String) {
         let range = csvRanges[file] ?? (0.0, 1.0)
-        let url = getReadableURL(for: file)
-        
-        guard let content = try? String(contentsOf: url) else {
-            csvPreviewInfo[file] = CSVPreviewInfo(count: 0, lowerWord: "-", upperWord: "-")
-            return
-        }
-        
-        let lines = content
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        let lines = WordlistFile.words(at: getReadableURL(for: file))
         
         guard !lines.isEmpty else {
             csvPreviewInfo[file] = CSVPreviewInfo(count: 0, lowerWord: "-", upperWord: "-")
