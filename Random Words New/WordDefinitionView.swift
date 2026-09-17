@@ -71,9 +71,6 @@ actor EnglishDictionaryStore {
     // The optional value distinguishes "known to have no audio" from "unknown".
     private var pronunciationURLCache: [String: URL?] = [:]
 
-    /// How many times a definition download is attempted before giving up.
-    private static let downloadAttemptLimit = 5
-
     func definitions(for word: String) -> [DictionaryEntry] {
         let key = word.lowercased()
 
@@ -162,6 +159,132 @@ actor EnglishDictionaryStore {
 
     // MARK: - Downloading definitions
 
+    /// The online dictionaries definitions can come from, in the order they're
+    /// tried. The first two are both derived from Wiktionary but served by
+    /// unrelated hosts, so one going down doesn't take the other with it;
+    /// `dictionaryAPIDev` is the original source and stays as a last resort.
+    private enum DefinitionProvider: CaseIterable {
+        case freeDictionary
+        case wiktionary
+        case dictionaryAPIDev
+
+        /// Only one provider serves pronunciation recordings, so the others
+        /// must not be allowed to cache "this word has no audio".
+        var servesPronunciationAudio: Bool { self == .dictionaryAPIDev }
+
+        func endpoint(for encodedWord: String) -> URL? {
+            switch self {
+            case .freeDictionary:
+                return URL(string: "https://freedictionaryapi.com/api/v1/entries/en/\(encodedWord)")
+            case .wiktionary:
+                return URL(string: "https://en.wiktionary.org/api/rest_v1/page/definition/\(encodedWord)")
+            case .dictionaryAPIDev:
+                return URL(string: "https://api.dictionaryapi.dev/api/v2/entries/en/\(encodedWord)")
+            }
+        }
+    }
+
+    /// A definition normalised out of whichever provider answered, ready to be
+    /// turned into a `DictionaryEntry`.
+    private struct FetchedDefinition {
+        let wordType: String
+        let definition: String
+        let example: String?
+        let phonetic: String?
+    }
+
+    private struct FetchedWord {
+        let definitions: [FetchedDefinition]
+        let audioURL: URL?
+    }
+
+    private enum ProviderOutcome {
+        case success(FetchedWord)
+        /// The provider answered, but its dictionary has no such word.
+        case noEntry
+        /// The provider couldn't be reached, or sent back something unusable.
+        case unreachable
+    }
+
+    /// How long a single provider gets to answer. Without a bound, one
+    /// unresponsive host stalls the whole chain — the outage this fallback
+    /// chain was built for hung for roughly twenty seconds per request.
+    private static let requestTimeout: TimeInterval = 10
+
+    /// Wikimedia asks API clients to identify themselves, and
+    /// freedictionaryapi.com turns away some generic library user agents.
+    private static let userAgent = "RandomWords/1.0 (iOS dictionary lookup)"
+
+    /// Runs a GET and maps the status onto `DefinitionDownloadError`: 404 is
+    /// the dictionary saying it has no such word, a permanent answer, while
+    /// any other non-200 is treated as a transient server problem.
+    private nonisolated static func fetchJSON(from url: URL) async throws -> Data {
+        var request = URLRequest(url: url, timeoutInterval: requestTimeout)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw DefinitionDownloadError.badResponse
+        }
+        if httpResponse.statusCode == 404 {
+            throw DefinitionDownloadError.notFound
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw DefinitionDownloadError.badResponse
+        }
+
+        return data
+    }
+
+    private nonisolated static func trimmedOrNil(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    /// Squeezes newlines, runs of spaces and the wide spaces Wiktionary pads
+    /// glosses with down to single spaces, so a definition or example reads as
+    /// one line the way the rest of the app's entries do.
+    private nonisolated static func singleLine(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let collapsed = value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return collapsed.isEmpty ? nil : collapsed
+    }
+
+    // MARK: Provider responses
+
+    /// `freedictionaryapi.com` — Wiktionary's data already parsed into parts of
+    /// speech, senses, examples and IPA, which is the shape this app wants.
+    private struct FreeDictionaryResponse: Decodable {
+        struct Entry: Decodable {
+            struct Pronunciation: Decodable {
+                let type: String?
+                let text: String?
+            }
+            struct Sense: Decodable {
+                let definition: String?
+                let examples: [String]?
+            }
+            let partOfSpeech: String?
+            let pronunciations: [Pronunciation]?
+            let senses: [Sense]?
+        }
+        let entries: [Entry]?
+    }
+
+    /// Wikimedia's own definition endpoint, keyed by language code. Definitions
+    /// arrive as HTML rather than plain text.
+    private struct WiktionaryGroup: Decodable {
+        struct Definition: Decodable {
+            let definition: String?
+            let examples: [String]?
+        }
+        let partOfSpeech: String?
+        let language: String?
+        let definitions: [Definition]?
+    }
+
     private struct APIEntry: Decodable {
         struct Phonetic: Decodable {
             let text: String?
@@ -199,94 +322,217 @@ actor EnglishDictionaryStore {
         }
     }
 
-    /// Performs a single dictionary API request for `word`. Throws `.notFound`
-    /// when the online dictionary has no entry for the word — a permanent
-    /// answer — and `.badResponse` for anything else, which the retry wrapper
-    /// treats as transient.
-    private func fetchAPIEntries(for word: String) async throws -> [APIEntry] {
-        guard let encodedWord = word.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let url = URL(string: "https://api.dictionaryapi.dev/api/v2/entries/en/\(encodedWord)") else {
-            throw DefinitionDownloadError.notFound
-        }
+    // MARK: Provider parsing
 
-        let (data, response) = try await URLSession.shared.data(from: url)
+    private nonisolated static func parseFreeDictionary(_ data: Data) throws -> FetchedWord {
+        let response = try JSONDecoder().decode(FreeDictionaryResponse.self, from: data)
 
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw DefinitionDownloadError.badResponse
-        }
-        if httpResponse.statusCode == 404 {
-            throw DefinitionDownloadError.notFound
-        }
-        guard httpResponse.statusCode == 200 else {
-            throw DefinitionDownloadError.badResponse
-        }
+        var definitions: [FetchedDefinition] = []
+        for entry in response.entries ?? [] {
+            let wordType = abbreviatedWordType(entry.partOfSpeech ?? "")
+            let phonetic = trimmedOrNil(
+                (entry.pronunciations ?? [])
+                    .first { $0.type?.lowercased() == "ipa" }?
+                    .text
+            )
 
-        return try JSONDecoder().decode([APIEntry].self, from: data)
-    }
-
-    /// Retries `attempt` on transient failures — a dropped connection, a server
-    /// error, a garbled response — so a flaky network doesn't surface as a
-    /// failed download. The retries are invisible to the caller, which keeps
-    /// showing its loading indicator until they're exhausted.
-    ///
-    /// `.notFound` means the dictionary genuinely has no entry for the word, so
-    /// it's reported straight away; cancellation is likewise never retried.
-    private func withDownloadRetries<T>(_ attempt: () async throws -> T) async throws -> T {
-        var lastError: Error = DefinitionDownloadError.badResponse
-
-        for attemptNumber in 1...Self.downloadAttemptLimit {
-            do {
-                return try await attempt()
-            } catch DefinitionDownloadError.notFound {
-                throw DefinitionDownloadError.notFound
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch let error as URLError where error.code == .cancelled {
-                throw error
-            } catch {
-                lastError = error
-                guard attemptNumber < Self.downloadAttemptLimit else { break }
-                // Back off 0.5s, 1s, 2s, 2s between attempts. Sleeping throws
-                // if the task is cancelled meanwhile, which ends the retries.
-                let delay = min(0.5 * Double(1 << (attemptNumber - 1)), 2)
-                try await Task.sleep(for: .seconds(delay))
+            // Only the top-level senses are kept. Their subsenses are narrower
+            // restatements of the same meaning, and a word like "run" has well
+            // over a hundred of them to page through.
+            for sense in entry.senses ?? [] {
+                guard let text = trimmedOrNil(sense.definition) else { continue }
+                definitions.append(FetchedDefinition(
+                    wordType: wordType,
+                    definition: text,
+                    example: singleLine(sense.examples?.first),
+                    phonetic: phonetic
+                ))
             }
         }
 
-        throw lastError
+        return FetchedWord(definitions: definitions, audioURL: nil)
     }
 
-    func downloadDefinitions(for word: String) async throws -> [DictionaryEntry] {
-        let apiEntries = try await withDownloadRetries {
-            try await fetchAPIEntries(for: word)
+    private nonisolated static func parseWiktionary(_ data: Data) throws -> FetchedWord {
+        let response = try JSONDecoder().decode([String: [WiktionaryGroup]].self, from: data)
+
+        // The "en" bucket also carries Translingual sections — ISO codes and
+        // symbols that happen to be spelled the same — which aren't English
+        // definitions at all.
+        let groups = (response["en"] ?? []).filter { $0.language == "English" }
+
+        var definitions: [FetchedDefinition] = []
+        for group in groups {
+            let wordType = abbreviatedWordType(group.partOfSpeech ?? "")
+            for definition in group.definitions ?? [] {
+                guard let text = plainText(fromHTML: definition.definition) else { continue }
+                definitions.append(FetchedDefinition(
+                    wordType: wordType,
+                    definition: text,
+                    example: plainText(fromHTML: definition.examples?.first),
+                    phonetic: nil
+                ))
+            }
         }
 
-        // Remember the pronunciation URL from this same response (in memory
-        // only) so tapping the speaker button doesn't hit the API again.
-        pronunciationURLCache[word.lowercased()] = apiEntries.compactMap(\.resolvedAudioURL).first
+        return FetchedWord(definitions: definitions, audioURL: nil)
+    }
 
-        var newDefinitions: [(word: String, entry: DictionaryEntry)] = []
+    private nonisolated static func parseDictionaryAPIDev(_ data: Data) throws -> FetchedWord {
+        let apiEntries = try JSONDecoder().decode([APIEntry].self, from: data)
+
+        var definitions: [FetchedDefinition] = []
         for apiEntry in apiEntries {
             let phonetic = apiEntry.resolvedPhonetic
             for meaning in apiEntry.meanings {
-                let wordType = Self.abbreviatedWordType(meaning.partOfSpeech ?? "")
+                let wordType = abbreviatedWordType(meaning.partOfSpeech ?? "")
                 for apiDefinition in meaning.definitions {
-                    let text = apiDefinition.definition.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !text.isEmpty else { continue }
-                    let example = apiDefinition.example?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    newDefinitions.append((word, DictionaryEntry(
+                    guard let text = trimmedOrNil(apiDefinition.definition) else { continue }
+                    definitions.append(FetchedDefinition(
                         wordType: wordType,
                         definition: text,
-                        example: (example?.isEmpty == false) ? example : nil,
-                        phonetic: phonetic,
-                        source: .downloaded
-                    )))
+                        example: trimmedOrNil(apiDefinition.example),
+                        phonetic: phonetic
+                    ))
                 }
             }
         }
 
-        guard !newDefinitions.isEmpty else {
+        return FetchedWord(
+            definitions: definitions,
+            audioURL: apiEntries.compactMap(\.resolvedAudioURL).first
+        )
+    }
+
+    /// Turns a Wiktionary definition into displayable text. A sense's subsenses
+    /// are nested inside its HTML as an `<ol>` list *and* repeated as their own
+    /// entries in `definitions`, so the list is cut off rather than flattened
+    /// into the parent's text.
+    private nonisolated static func plainText(fromHTML html: String?) -> String? {
+        guard var markup = html else { return nil }
+
+        if let listStart = markup.range(of: "<ol") {
+            markup = String(markup[markup.startIndex..<listStart.lowerBound])
+        }
+
+        var stripped = ""
+        var insideTag = false
+        for character in markup {
+            switch character {
+            case "<": insideTag = true
+            case ">": insideTag = false
+            default: if !insideTag { stripped.append(character) }
+            }
+        }
+
+        // "&amp;" is unescaped last so that an already-escaped entity such as
+        // "&amp;lt;" isn't decoded a second time into a stray "<".
+        let entities = [
+            ("&nbsp;", "\u{00A0}"), ("&quot;", "\""), ("&apos;", "'"),
+            ("&lt;", "<"), ("&gt;", ">"), ("&mdash;", "—"), ("&ndash;", "–"),
+            ("&hellip;", "…"), ("&amp;", "&")
+        ]
+        var text = singleLine(stripped) ?? ""
+        for (entity, replacement) in entities where text.contains(entity) {
+            text = text.replacingOccurrences(of: entity, with: replacement)
+        }
+
+        return trimmedOrNil(text)
+    }
+
+    // MARK: Provider chain
+
+    private nonisolated static func fetch(word: String, from provider: DefinitionProvider) async throws -> FetchedWord {
+        guard let encodedWord = word.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = provider.endpoint(for: encodedWord) else {
             throw DefinitionDownloadError.notFound
+        }
+
+        let data = try await fetchJSON(from: url)
+
+        let fetched: FetchedWord
+        switch provider {
+        case .freeDictionary: fetched = try parseFreeDictionary(data)
+        case .wiktionary: fetched = try parseWiktionary(data)
+        case .dictionaryAPIDev: fetched = try parseDictionaryAPIDev(data)
+        }
+
+        // Some providers answer 200 with an empty body for an unknown word
+        // instead of 404; either way it's a definitive "no", not a retry.
+        guard !fetched.definitions.isEmpty else {
+            throw DefinitionDownloadError.notFound
+        }
+        return fetched
+    }
+
+    private nonisolated static func attempt(word: String, from provider: DefinitionProvider) async throws -> ProviderOutcome {
+        do {
+            return .success(try await fetch(word: word, from: provider))
+        } catch DefinitionDownloadError.notFound {
+            return .noEntry
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw error
+        } catch {
+            return .unreachable
+        }
+    }
+
+    /// Asks each dictionary in turn and returns the first real answer.
+    ///
+    /// A provider that replies "no such word" is out of the running for good —
+    /// it won't have the word a second time either. One that can't be reached
+    /// (offline, server error, timeout, unparseable response) is remembered and
+    /// given exactly one more turn, in the same order, once the others have had
+    /// theirs. The retries are invisible to the caller, which keeps showing its
+    /// loading indicator until the chain is exhausted.
+    private nonisolated static func fetchFromProviders(word: String) async throws -> (provider: DefinitionProvider, result: FetchedWord) {
+        var unreachable: [DefinitionProvider] = []
+
+        for provider in DefinitionProvider.allCases {
+            switch try await attempt(word: word, from: provider) {
+            case .success(let result): return (provider, result)
+            case .noEntry: continue
+            case .unreachable: unreachable.append(provider)
+            }
+        }
+
+        for provider in unreachable {
+            if case .success(let result) = try await attempt(word: word, from: provider) {
+                return (provider, result)
+            }
+        }
+
+        // If even one dictionary was able to say it doesn't have the word,
+        // that's the more useful thing to tell the user — a host being down
+        // shouldn't turn every unknown word into "check your connection".
+        // Only when nothing could be reached at all is this a network problem.
+        if unreachable.count < DefinitionProvider.allCases.count {
+            throw DefinitionDownloadError.notFound
+        }
+        throw DefinitionDownloadError.badResponse
+    }
+
+    func downloadDefinitions(for word: String) async throws -> [DictionaryEntry] {
+        let (provider, fetched) = try await Self.fetchFromProviders(word: word)
+
+        // Remember the pronunciation URL from this same response (in memory
+        // only) so tapping the speaker button doesn't hit the API again. When
+        // a provider that doesn't serve audio answered, leave the cache alone
+        // rather than recording a "no audio" it can't actually vouch for.
+        if provider.servesPronunciationAudio {
+            pronunciationURLCache[word.lowercased()] = fetched.audioURL
+        }
+
+        let newDefinitions: [(word: String, entry: DictionaryEntry)] = fetched.definitions.map { definition in
+            (word: word, entry: DictionaryEntry(
+                wordType: definition.wordType,
+                definition: definition.definition,
+                example: definition.example,
+                phonetic: definition.phonetic,
+                source: .downloaded
+            ))
         }
 
         var downloaded = downloadedDefinitions ?? Self.loadDefinitionsFile(at: Self.downloadedDefinitionsURL, source: .downloaded)
@@ -304,35 +550,26 @@ actor EnglishDictionaryStore {
         return definitions(for: word)
     }
 
-    /// Resolves the pronunciation audio URL for a word from the dictionary API.
-    /// The URL is cached in memory but, like all audio, never written to disk.
+    /// Resolves the pronunciation audio URL for a word. Only `dictionaryapi.dev`
+    /// serves recordings, so this asks it directly instead of walking the whole
+    /// chain. The URL is cached in memory but, like all audio, never written to
+    /// disk.
     func pronunciationAudioURL(for word: String) async throws -> URL? {
         let key = word.lowercased()
         if let cached = pronunciationURLCache[key] {
             return cached
         }
 
-        guard let encodedWord = word.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let url = URL(string: "https://api.dictionaryapi.dev/api/v2/entries/en/\(encodedWord)") else {
-            throw DefinitionDownloadError.notFound
-        }
-
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw DefinitionDownloadError.badResponse
-        }
-        if httpResponse.statusCode == 404 {
+        do {
+            let fetched = try await Self.fetch(word: word, from: .dictionaryAPIDev)
+            pronunciationURLCache[key] = fetched.audioURL
+            return fetched.audioURL
+        } catch DefinitionDownloadError.notFound {
+            // No entry at all means no recording either; remember that so the
+            // speaker button stays hidden without asking again.
             pronunciationURLCache[key] = URL?.none
             return nil
         }
-        guard httpResponse.statusCode == 200 else {
-            throw DefinitionDownloadError.badResponse
-        }
-
-        let apiEntries = try JSONDecoder().decode([APIEntry].self, from: data)
-        let audioURL = apiEntries.compactMap(\.resolvedAudioURL).first
-        pronunciationURLCache[key] = audioURL
-        return audioURL
     }
 
     func deleteAllDownloadedDefinitions() {
@@ -355,7 +592,14 @@ actor EnglishDictionaryStore {
         case "preposition": return "prep."
         case "conjunction": return "conj."
         case "interjection", "exclamation": return "interj."
-        default: return partOfSpeech
+        case "determiner": return "det."
+        case "numeral", "number": return "num."
+        case "article": return "art."
+        case "particle": return "part."
+        case "proper noun", "name": return "prop. n."
+        // Wiktionary capitalises its parts of speech ("Proper noun"), so even
+        // the ones without an abbreviation are lowercased to match the rest.
+        default: return partOfSpeech.lowercased()
         }
     }
 
@@ -1004,6 +1248,8 @@ struct WordDefinitionView: View {
         downloadError = nil
 
         Task {
+            var didDownload = false
+
             do {
                 let updated = try await EnglishDictionaryStore.shared.downloadDefinitions(for: selectedWord)
                 entries = updated
@@ -1011,8 +1257,7 @@ struct WordDefinitionView: View {
                     currentIndex = updated.firstIndex { $0.source == .downloaded } ?? 0
                 }
                 autoDownloadFailed = false
-                // The download primed the audio cache; reflect availability.
-                await refreshPronunciationAvailability()
+                didDownload = true
             } catch DefinitionDownloadError.notFound {
                 if automatically {
                     autoDownloadFailed = true
@@ -1027,6 +1272,14 @@ struct WordDefinitionView: View {
                 }
             }
             isDownloading = false
+
+            // Audio comes from a different provider than the definitions may
+            // have, so resolving it can be a second request. It runs only once
+            // the download indicator is cleared — the definitions are already
+            // on screen and it's just the speaker button that's still pending.
+            if didDownload {
+                await refreshPronunciationAvailability()
+            }
         }
     }
 }
