@@ -39,6 +39,11 @@ struct EditCSVView: View {
     @State private var pendingUndo: [(index: Int, word: String)]?
     @State private var undoToastID = 0
 
+    // Typing over a row's number moves that word to the typed position.
+    @State private var editingPositionIndex: Int?
+    @State private var positionInput = ""
+    @FocusState private var focusedPositionIndex: Int?
+
     @Environment(\.dismiss) private var dismiss
 
     enum SortMode: String, CaseIterable {
@@ -86,6 +91,7 @@ struct EditCSVView: View {
                             }
                     }
                     .onDelete(perform: deleteWords)
+                    .onMove(perform: dragToReorderAction)
                 }
 
                 Section {
@@ -151,7 +157,7 @@ struct EditCSVView: View {
                     }
                     .simultaneousGesture(
                         TapGesture().onEnded {
-                            saveCSV()
+                            saveCSVNow()
                         }
                     )
 
@@ -183,13 +189,21 @@ struct EditCSVView: View {
                 focusRequestedWord()
                 scrollToPendingPosition(with: proxy)
             }
+            .onChange(of: focusedPositionIndex) { oldValue, newValue in
+                // Tapping away from a number drops what was typed. Hopping
+                // straight to another number already moved the edit there.
+                if newValue == nil, editingPositionIndex == oldValue {
+                    editingPositionIndex = nil
+                }
+            }
             .onDisappear {
                 guard !wasDeleted else { return }
 
                 let url = getDocumentsURL()
                 if FileManager.default.fileExists(atPath: url.path) {
                     removeNewestDuplicates()
-                    saveCSV()
+                    // The screen underneath reads this file as soon as it's back.
+                    saveCSVNow()
                 }
             }
         }
@@ -198,22 +212,70 @@ struct EditCSVView: View {
     @ViewBuilder
     private func editableRow(for displayedPosition: Int) -> some View {
         if let originalIndex = originalIndex(forDisplayedPosition: displayedPosition) {
-            TextField(
-                "Word",
-                text: Binding(
-                    get: { originalOrder[safe: originalIndex] ?? "" },
-                    set: { newValue in
-                        guard originalOrder.indices.contains(originalIndex) else { return }
-                        originalOrder[originalIndex] = newValue
-                        applySearchAndPagination(keepWindow: true)
-                    }
+            HStack(spacing: 12) {
+                TextField(
+                    "Word",
+                    text: Binding(
+                        get: { originalOrder[safe: originalIndex] ?? "" },
+                        set: { newValue in
+                            guard originalOrder.indices.contains(originalIndex) else { return }
+                            originalOrder[originalIndex] = newValue
+                            applySearchAndPagination(keepWindow: true)
+                        }
+                    )
                 )
-            )
+
+                positionLabel(for: originalIndex)
+            }
+            // Otherwise the separator lines up under the number, the only Text.
+            .alignmentGuide(.listRowSeparatorLeading) { dimensions in
+                dimensions[.leading]
+            }
             .listRowBackground(
                 highlightedOriginalIndex == originalIndex
                 ? Color.gray.opacity(0.5)
                 : Color.clear
             )
+        }
+    }
+
+    /// The word's line number in the CSV, whatever the sort. Tapping it lets
+    /// the user type a new one.
+    @ViewBuilder
+    private func positionLabel(for originalIndex: Int) -> some View {
+        if editingPositionIndex == originalIndex {
+            TextField(String(originalIndex + 1), text: $positionInput)
+                .keyboardType(.numbersAndPunctuation)
+                .submitLabel(.done)
+                .multilineTextAlignment(.trailing)
+                .monospacedDigit()
+                .frame(width: 80)
+                .focused($focusedPositionIndex, equals: originalIndex)
+                .onAppear {
+                    focusedPositionIndex = originalIndex
+                }
+                .onChange(of: positionInput) { _, newValue in
+                    // Digits only, so there's no way to type a negative number.
+                    let digits = newValue.filter(\.isASCIIDigit)
+                    if digits != newValue {
+                        positionInput = digits
+                    }
+                }
+                .onSubmit(commitPositionEdit)
+        } else {
+            Button {
+                beginPositionEdit(for: originalIndex)
+            } label: {
+                Text(verbatim: String(originalIndex + 1))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.secondary)
+                    .padding(.leading, 12)
+                    // A bigger target than the digits, without making the row taller.
+                    .contentShape(Rectangle().inset(by: -10))
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Position \(originalIndex + 1)")
+            .accessibilityHint("Type a new number to move this word")
         }
     }
 
@@ -237,6 +299,9 @@ struct EditCSVView: View {
 
     private func deleteCSVFile() {
         let fileURL = getDocumentsURL()
+
+        // A save still in flight would put the file right back.
+        WordlistFile.waitForPendingSaves()
 
         do {
             if FileManager.default.fileExists(atPath: fileURL.path) {
@@ -273,9 +338,12 @@ struct EditCSVView: View {
     }
 
     private func saveCSV() {
-        let fileURL = getDocumentsURL()
-        let content = originalOrder.joined(separator: "\n")
-        try? content.write(to: fileURL, atomically: true, encoding: .utf8)
+        WordlistFile.saveInBackground(originalOrder, to: getDocumentsURL())
+    }
+
+    /// For when something reads the file right away (sharing, leaving).
+    private func saveCSVNow() {
+        WordlistFile.save(originalOrder, to: getDocumentsURL())
     }
 
     private func changeSortMode(to mode: SortMode) {
@@ -311,10 +379,17 @@ struct EditCSVView: View {
         if trimmedSearch.isEmpty {
             filteredDisplayedIndices = displayedIndices
         } else {
-            filteredDisplayedIndices = displayedIndices.filter { index in
-                guard originalOrder.indices.contains(index) else { return false }
-                return originalOrder[index].localizedCaseInsensitiveContains(trimmedSearch)
+            let numberedIndex = csvIndex(forNumberQuery: trimmedSearch)
+            var matches = WordSearch.indices(
+                of: trimmedSearch,
+                in: originalOrder,
+                orderedBy: displayedIndices,
+                excluding: numberedIndex
+            )
+            if let numberedIndex {
+                matches.insert(numberedIndex, at: 0)
             }
+            filteredDisplayedIndices = matches
         }
 
         if keepWindow {
@@ -322,6 +397,17 @@ struct EditCSVView: View {
         } else {
             setWindow(start: 0, end: pageSize)
         }
+    }
+
+    /// A search that is only a number also finds the word with that number:
+    /// "6" is the 6th line, not 60–69. Any letter in the query turns this off.
+    private func csvIndex(forNumberQuery query: String) -> Int? {
+        guard query.utf8.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }),
+              let number = Int(query),
+              originalOrder.indices.contains(number - 1) else {
+            return nil
+        }
+        return number - 1
     }
 
     private func setWindow(start: Int, end: Int) {
@@ -419,27 +505,38 @@ struct EditCSVView: View {
         return currentDisplayedIndices.firstIndex(of: originalIndex)
     }
 
+    /// This runs every time the list is closed and almost never finds
+    /// anything, so it only rebuilds the list (and re-sorts, ~0.5 s when
+    /// alphabetical) when it has to.
     private func removeNewestDuplicates() {
-        var seen = Set<String>()
-        var deduplicatedReversed: [String] = []
+        let whitespace = CharacterSet.whitespaces
+        var seen = Set<String>(minimumCapacity: originalOrder.count)
+        var isDuplicate: [Bool]?
 
-        for word in originalOrder.reversed() {
-            let trimmed = word.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty {
-                deduplicatedReversed.append(word)
-                continue
+        for index in originalOrder.indices.reversed() {
+            let word = originalOrder[index]
+            // Words come off the file already trimmed; only the ones edited
+            // here can need it, and trimming all 84k is most of the cost.
+            let needsTrimming = word.unicodeScalars.first.map(whitespace.contains) == true
+                || word.unicodeScalars.last.map(whitespace.contains) == true
+            let trimmed = needsTrimming ? word.trimmingCharacters(in: .whitespaces) : word
+
+            if trimmed.isEmpty { continue }
+
+            if !seen.insert(trimmed).inserted {
+                if isDuplicate == nil {
+                    isDuplicate = Array(repeating: false, count: originalOrder.count)
+                }
+                isDuplicate?[index] = true
             }
-
-            if seen.contains(trimmed) {
-                continue
-            }
-
-            seen.insert(trimmed)
-            deduplicatedReversed.append(word)
         }
 
-        originalOrder = deduplicatedReversed.reversed()
-        applyCurrentSort()
+        guard let isDuplicate else { return }
+
+        originalOrder = originalOrder.indices
+            .filter { !isDuplicate[$0] }
+            .map { originalOrder[$0] }
+        applyCurrentSort(keepWindow: true)
     }
 
     private func getDocumentsURL() -> URL {
@@ -557,6 +654,109 @@ struct EditCSVView: View {
         saveCSV()
     }
 
+    // MARK: Reordering
+
+    /// Dragging only makes sense while the rows show the whole CSV in file
+    /// order (or reversed): there a row's position is its line in the file.
+    /// Sorted alphabetically a dropped word would just snap back, and search
+    /// results skip the lines in between.
+    private var canDragToReorder: Bool {
+        (sortMode == .original || sortMode == .reverseOriginal)
+            && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var dragToReorderAction: ((IndexSet, Int) -> Void)? {
+        guard canDragToReorder else { return nil }
+        return { offsets, destination in
+            moveRows(fromOffsets: offsets, toOffset: destination)
+        }
+    }
+
+    private func moveRows(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        // The offsets index the rows the ForEach was handed, which start at
+        // windowStart rather than at 0.
+        let count = originalOrder.count
+        let sourcePositions = offsets.map { windowStart + $0 }
+        let destinationPosition = windowStart + destination
+
+        if sortMode == .reverseOriginal {
+            originalOrder.move(
+                fromOffsets: IndexSet(sourcePositions.map { count - 1 - $0 }),
+                toOffset: count - destinationPosition
+            )
+        } else {
+            originalOrder.move(fromOffsets: IndexSet(sourcePositions), toOffset: destinationPosition)
+        }
+
+        // Rows are laid out by CSV index in these orders, so they already
+        // show the new arrangement; nothing to re-sort or re-filter.
+        finishReorder()
+    }
+
+    private func beginPositionEdit(for originalIndex: Int) {
+        positionInput = ""
+        editingPositionIndex = originalIndex
+    }
+
+    private func commitPositionEdit() {
+        guard let source = editingPositionIndex else { return }
+        editingPositionIndex = nil
+
+        // The field drops anything but digits as it's typed; this covers
+        // keystrokes that land faster than it can.
+        let digits = positionInput.filter(\.isASCIIDigit)
+        guard !digits.isEmpty, !originalOrder.isEmpty else { return }
+
+        // Numbering always runs 1...count with no gaps, so anything past the
+        // end means the end (digits too long for an Int included).
+        let requested = Int(digits) ?? .max
+        let destination = min(max(requested, 1), originalOrder.count) - 1
+        guard destination != source else { return }
+
+        moveWord(from: source, to: destination)
+        showToast("Moved to \(destination + 1)")
+    }
+
+    /// Puts the word at `source` on line `destination`. The word that had that
+    /// line and everything between the two shifts by one to fill the gap.
+    private func moveWord(from source: Int, to destination: Int) {
+        guard originalOrder.indices.contains(source),
+              originalOrder.indices.contains(destination) else { return }
+
+        let word = originalOrder.remove(at: source)
+        originalOrder.insert(word, at: destination)
+
+        if sortMode == .alphabetical || sortMode == .reverseAlphabetical {
+            // The words keep their alphabetical rows and only their numbers
+            // change, so shifting the indices beats a full localized re-sort.
+            let shift = source < destination ? -1 : 1
+            let shifted = min(source, destination)...max(source, destination)
+            displayedIndices = displayedIndices.map { index in
+                if index == source { return destination }
+                return shifted.contains(index) ? index + shift : index
+            }
+        }
+        // In CSV order the rows are laid out by index and already match.
+
+        if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            filteredDisplayedIndices = displayedIndices
+        } else {
+            // The results are still the same words, but a number search now
+            // points at whichever word took that line.
+            applySearchAndPagination(keepWindow: true)
+        }
+
+        finishReorder()
+    }
+
+    private func finishReorder() {
+        // Undo remembers CSV positions, which now point at other words.
+        undoToastID += 1
+        pendingUndo = nil
+        highlightedOriginalIndex = nil
+        saveCSV()
+    }
+
     private func toggleSearch() {
         isSearchVisible.toggle()
 
@@ -571,5 +771,11 @@ struct EditCSVView: View {
 private extension Array {
     subscript(safe index: Int) -> Element? {
         indices.contains(index) ? self[index] : nil
+    }
+}
+
+private extension Character {
+    var isASCIIDigit: Bool {
+        isASCII && isNumber
     }
 }

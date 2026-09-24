@@ -31,8 +31,34 @@ enum WordlistFile {
     }
 
     static func words(at url: URL) -> [String] {
+        waitForPendingSaves()
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return [] }
         return words(in: data)
+    }
+
+    // MARK: Saving
+
+    // Every write goes through one serial queue, so a background save can never
+    // land after a newer one, and reads wait on it so nobody sees a stale file.
+    private nonisolated static let saveQueue = DispatchQueue(label: "WordlistFile.save", qos: .userInitiated)
+
+    static func save(_ words: [String], to url: URL) {
+        saveQueue.sync { write(words, to: url) }
+    }
+
+    /// Joining and writing the 84k-line list takes long enough on the main
+    /// thread to stutter a drag-and-drop, so edits made while the list is on
+    /// screen are written from here.
+    static func saveInBackground(_ words: [String], to url: URL) {
+        saveQueue.async { write(words, to: url) }
+    }
+
+    static func waitForPendingSaves() {
+        saveQueue.sync {}
+    }
+
+    private nonisolated static func write(_ words: [String], to url: URL) {
+        try? words.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
     }
 
     static func words(in data: Data) -> [String] {
