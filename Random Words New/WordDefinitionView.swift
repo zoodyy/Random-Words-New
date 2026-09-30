@@ -54,6 +54,14 @@ struct DefinitionTarget: Identifiable {
     var id: String { words.joined(separator: "\u{1}") }
 }
 
+/// A lookup pushed onto the definition sheet's navigation stack. Every push
+/// gets its own identity, so looking up the same word twice still opens a
+/// fresh screen.
+struct DefinitionPage: Hashable {
+    let id = UUID()
+    let words: [String]
+}
+
 nonisolated enum DefinitionDownloadError: Error {
     case notFound
     case badResponse
@@ -857,25 +865,69 @@ final class PronunciationPlayer: ObservableObject {
     }
 }
 
+/// The sheet opened by swiping down on the word screen. Every lookup made
+/// inside it, from the search button or from selected definition text, is
+/// pushed onto this one navigation stack, so swiping the sheet down from any
+/// depth goes straight back to the word screen.
+struct DefinitionSheet: View {
+    let words: [String]
+    @State private var path: [DefinitionPage] = []
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            definitionScreen(for: words)
+                .navigationDestination(for: DefinitionPage.self) { lookup in
+                    definitionScreen(for: lookup.words)
+                }
+                .background(ContentPopGestureDisabler())
+        }
+    }
+
+    private func definitionScreen(for words: [String]) -> WordDefinitionView {
+        WordDefinitionView(words: words) { lookedUpWords in
+            path.append(DefinitionPage(words: lookedUpWords))
+        }
+    }
+}
+
+/// Since iOS 26 a navigation stack can also be popped by swiping right from
+/// anywhere on the screen. On a pushed definition screen that gesture keeps
+/// the sheet's swipe down from starting, so it's switched off here. The back
+/// button and the swipe in from the screen's left edge still go back.
+private struct ContentPopGestureDisabler: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Controller {
+        Controller()
+    }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {}
+
+    final class Controller: UIViewController {
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            navigationController?.interactiveContentPopGestureRecognizer?.isEnabled = false
+        }
+    }
+}
+
 struct WordDefinitionView: View {
     /// The words available to inspect. When more than one is present a picker
     /// row is shown so the user can switch between them; `selectedWord` tracks
     /// which one's definitions are currently displayed.
     let words: [String]
     @State private var selectedWord: String
+    /// Opens another definition screen for the given words.
+    let onLookUp: ([String]) -> Void
 
-    init(word: String) {
-        self.words = [word]
-        _selectedWord = State(initialValue: word)
-    }
-
-    init(words: [String]) {
+    init(words: [String], onLookUp: @escaping ([String]) -> Void) {
         let cleaned = words.isEmpty ? [""] : words
         self.words = cleaned
         _selectedWord = State(initialValue: cleaned[0])
+        self.onLookUp = onLookUp
     }
 
     @State private var entries: [DictionaryEntry]?
+    /// The word whose definitions were last loaded in full.
+    @State private var loadedWord: String?
     @State private var currentIndex = 0
     @State private var showingAddSheet = false
     @State private var showingDeleteAlert = false
@@ -885,6 +937,14 @@ struct WordDefinitionView: View {
     @State private var pronunciationError: String?
     @State private var hasPronunciationAudio = false
     @StateObject private var pronunciationPlayer = PronunciationPlayer()
+    @State private var showingSearch = false
+    @State private var searchText = ""
+    @State private var textSelection = DefinitionTextSelection()
+    /// Where the current horizontal drag began, and whether text was selected
+    /// at that moment. Dragging a selection handle sideways looks just like a
+    /// swipe, so a drag that starts while text is selected doesn't switch
+    /// definitions.
+    @State private var swipeStart: (location: CGPoint, hadTextSelection: Bool)?
 
     @AppStorage("autoDownloadWordDefinitions") private var autoDownloadDefinitions = true
 
@@ -1005,17 +1065,12 @@ struct WordDefinitionView: View {
                     }
 
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(entry.definition)
-                                .font(.body)
-
-                            if let example = entry.example {
-                                Text("“\(example)”")
-                                    .font(.body)
-                                    .italic()
-                                    .foregroundColor(.secondary)
-                            }
-                        }
+                        SelectableDefinitionText(
+                            definition: entry.definition,
+                            example: entry.example,
+                            selection: textSelection,
+                            onDefine: lookUpSelection
+                        )
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 24)
                         .padding(.bottom, 16)
@@ -1085,64 +1140,98 @@ struct WordDefinitionView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                definitionContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 30)
-                            .onEnded { value in
-                                // Only react to mostly-horizontal swipes so vertical
-                                // scrolling and sheet dismissal keep working. This
-                                // gesture is scoped to the definition area only, so
-                                // scrolling the word picker row below doesn't change
-                                // the current definition.
-                                guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                                if value.translation.width < 0 {
-                                    showNextDefinition()
-                                } else {
-                                    showPreviousDefinition()
-                                }
-                            }
-                    )
-
-                if words.count > 1 {
-                    wordPicker
-                }
-            }
-            .padding(.top, 16)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    if isDownloading {
-                        ProgressView()
-                    } else if showsDownloadButton {
-                        Button {
-                            downloadDefinitions()
-                        } label: {
-                            Image(systemName: "arrow.down.circle")
-                        }
-                    }
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 16) {
-                        if currentEntry?.isDeletable == true {
-                            Button(role: .destructive) {
-                                showingDeleteAlert = true
-                            } label: {
-                                Image(systemName: "trash")
+        VStack(spacing: 16) {
+            definitionContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 30)
+                        .onChanged { value in
+                            // A cancelled drag never reaches onEnded, so a new
+                            // start location is what marks a new drag.
+                            if swipeStart?.location != value.startLocation {
+                                swipeStart = (value.startLocation, textSelection.isActive)
                             }
                         }
+                        .onEnded { value in
+                            let hadTextSelection = swipeStart?.hadTextSelection ?? textSelection.isActive
+                            swipeStart = nil
+                            guard !hadTextSelection else { return }
 
-                        Button {
-                            showingAddSheet = true
-                        } label: {
-                            Image(systemName: "plus")
+                            // Only react to mostly-horizontal swipes so vertical
+                            // scrolling and sheet dismissal keep working. This
+                            // gesture is scoped to the definition area only, so
+                            // scrolling the word picker row below doesn't change
+                            // the current definition.
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            if value.translation.width < 0 {
+                                showNextDefinition()
+                            } else {
+                                showPreviousDefinition()
+                            }
                         }
+                )
+                .simultaneousGesture(
+                    SpatialTapGesture(coordinateSpace: .global)
+                        .onEnded { value in
+                            textSelection.clear(ifTappedOutsideAt: value.location)
+                        }
+                )
+
+            if words.count > 1 {
+                wordPicker
+            }
+        }
+        .padding(.top, 16)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    searchText = ""
+                    showingSearch = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .accessibilityLabel("Look up a word")
+            }
+
+            ToolbarItem(placement: .topBarLeading) {
+                if isDownloading {
+                    ProgressView()
+                } else if showsDownloadButton {
+                    Button {
+                        downloadDefinitions()
+                    } label: {
+                        Image(systemName: "arrow.down.circle")
                     }
                 }
             }
+
+            ToolbarItem(placement: .topBarTrailing) {
+                HStack(spacing: 16) {
+                    if currentEntry?.isDeletable == true {
+                        Button(role: .destructive) {
+                            showingDeleteAlert = true
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                    }
+
+                    Button {
+                        showingAddSheet = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+        }
+        .alert("Look Up a Word", isPresented: $showingSearch) {
+            TextField("Word", text: $searchText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .onSubmit(searchTypedWord)
+            Button("Cancel", role: .cancel) {}
+            Button("Search", action: searchTypedWord)
+                .keyboardShortcut(.defaultAction)
         }
         .alert("Download Failed", isPresented: Binding(
             get: { downloadError != nil },
@@ -1174,6 +1263,11 @@ struct WordDefinitionView: View {
             Text("Are you sure you want to delete this definition of \"\(selectedWord)\"?")
         }
         .task(id: selectedWord) {
+            // The task also restarts when coming back from a definition
+            // screen pushed on top of this one, which mustn't reload the word
+            // and jump back to its first definition.
+            guard loadedWord != selectedWord else { return }
+
             // Reset per-word state so switching words in the picker doesn't
             // briefly show the previous word's definitions or audio button.
             entries = nil
@@ -1189,6 +1283,9 @@ struct WordDefinitionView: View {
             if !didStartDownload {
                 await refreshPronunciationAvailability()
             }
+            if !Task.isCancelled {
+                loadedWord = selectedWord
+            }
         }
     }
 
@@ -1201,6 +1298,39 @@ struct WordDefinitionView: View {
         guard await NetworkReachability.hasConnection() else { return false }
         downloadDefinitions(automatically: true)
         return true
+    }
+
+    /// Looks up exactly what was typed, just as if it had been the random word.
+    private func searchTypedWord() {
+        let word = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Cleared first so that the return key and the Search button can't
+        // both open a screen for the same entry.
+        searchText = ""
+        guard !word.isEmpty else { return }
+        onLookUp([word])
+    }
+
+    /// Opens the definition screen for text selected in a definition. A single
+    /// word is looked up on its own. Several are looked up as the whole phrase
+    /// first, since idioms and phrasal verbs have entries of their own, and
+    /// then each word separately in the word picker.
+    private func lookUpSelection(_ selection: String) {
+        let edges = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+        let singleWords = selection
+            .split(whereSeparator: \.isWhitespace)
+            .map { $0.trimmingCharacters(in: edges) }
+            .filter { !$0.isEmpty }
+        guard singleWords.count > 1 else {
+            if !singleWords.isEmpty { onLookUp(singleWords) }
+            return
+        }
+
+        let phrase = selection
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .trimmingCharacters(in: edges)
+        var seen: Set<String> = []
+        onLookUp(([phrase] + singleWords).filter { seen.insert($0.lowercased()).inserted })
     }
 
     private func addDefinition(wordType: String, definition: String, example: String, phonetic: String) {

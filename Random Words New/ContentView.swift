@@ -314,7 +314,7 @@ struct ContentView: View {
                         resumeTimer()
                     }
                 }) { target in
-                    WordDefinitionView(words: target.words)
+                    DefinitionSheet(words: target.words)
                 }
                 .onAppear {
                     syncDefaultWordScreenStyle()
