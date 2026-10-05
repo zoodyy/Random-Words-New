@@ -17,6 +17,12 @@ struct ContentView: View {
         var upper: Double
     }
     
+    /// A displayed word together with the wordlist it can be opened in.
+    private struct WordSource: Hashable {
+        let csv: String
+        let word: String
+    }
+    
     private struct CSVWordPool {
         let words: [String]
         let lowerBound: Int
@@ -71,7 +77,7 @@ struct ContentView: View {
     @AppStorage("minLengthExcludedCSVsData") private var minLengthExcludedCSVsData: Data = Data()
     @AppStorage("wordHistoryData") private var wordHistoryData: Data = Data()
     @AppStorage("savedHistoryIndex") private var savedHistoryIndex: Int = -1
-    @AppStorage("savedWordSourceCSV") private var savedWordSourceCSV: String = ""
+    @AppStorage("savedWordSourceCSVsData") private var savedWordSourceCSVsData: Data = Data()
     
     @State private var selectedCSVs: Set<String> = []
     @State private var csvRanges: [String: RangePair] = [:]
@@ -85,7 +91,9 @@ struct ContentView: View {
     @State private var wordPools: [String: CSVWordPool] = [:]
     @State private var orderedActiveCSVs: [String] = []
     @State private var totalEligibleWordCount: Int = 0
-    @State private var firstSelectedWordSourceCSV: String?
+    /// The wordlist each displayed word came from, in the same order as
+    /// `selectedWords`; `nil` where a word can't be found in any of them.
+    @State private var selectedWordSourceCSVs: [String?] = []
     
     /// How far the word is currently displaced from its resting place: the live
     /// finger translation while dragging, then the fly-out while a swipe commits.
@@ -111,7 +119,15 @@ struct ContentView: View {
     @GestureState private var isPressing = false
     
     @State private var navigateToCSV: String?
-    @State private var selectedWordSource: (csv: String, word: String)?
+    @State private var selectedWordSource: WordSource?
+    /// The words offered when swiping up on several at once, so the user can
+    /// pick which one to open in its wordlist.
+    @State private var wordSourceChoices: [WordSource] = []
+    @State private var isChoosingWordSource = false
+    /// Playback state from before the word choice was offered. Picking a word
+    /// puts it back before leaving, so it's remembered just like a direct
+    /// swipe up.
+    @State private var wasTimerRunningBeforeChoice = false
     @State private var definitionTarget: DefinitionTarget?
     
     @State private var wordHistory: [[String]] = []
@@ -255,7 +271,7 @@ struct ContentView: View {
         if wordHistory.isEmpty || historyIndex <= 0 {
             unavailable.insert(.right)
         }
-        if firstSelectedWordSourceCSV == nil {
+        if !selectedWordSourceCSVs.contains(where: { $0 != nil }) {
             unavailable.insert(.up)
         }
         return unavailable
@@ -308,6 +324,19 @@ struct ContentView: View {
                         )
                     }
                 }
+                .confirmationDialog("Show in Wordlist", isPresented: $isChoosingWordSource, titleVisibility: .visible) {
+                    ForEach(wordSourceChoices, id: \.self) { source in
+                        Button(source.word) { openInWordlist(source) }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                }
+                .onChange(of: isChoosingWordSource) { _, isChoosing in
+                    // However the dialog closed, playback goes back to how it
+                    // was; picking a word then leaves the screen afterwards.
+                    guard !isChoosing, wasTimerRunningBeforeChoice else { return }
+                    wasTimerRunningBeforeChoice = false
+                    resumeTimer()
+                }
                 .sheet(item: $definitionTarget, onDismiss: {
                     if wasTimerRunningBeforeDefinition {
                         wasTimerRunningBeforeDefinition = false
@@ -338,6 +367,10 @@ struct ContentView: View {
 
                         if historyIndex >= 0, historyIndex < wordHistory.count {
                             selectedWords = wordHistory[historyIndex]
+                            selectedWordSourceCSVs = resolveSourceCSVs(
+                                for: selectedWords,
+                                preferring: selectedWordSourceCSVs
+                            )
                         } else {
                             selectRandomWords(recordHistory: true)
                         }
@@ -698,17 +731,53 @@ struct ContentView: View {
                     entering: CGSize(width: -horizontalFlyOut, height: 0)) {
             historyIndex -= 1
             selectedWords = wordHistory[historyIndex]
+            selectedWordSourceCSVs = resolveSourceCSVs(for: selectedWords)
             saveHistoryState()
         }
     }
     
     private func handleUpSwipe() {
-        guard let word = selectedWords.first,
-              let csv = firstSelectedWordSourceCSV else { return releaseWord() }
+        let sources = openableWordSources
+        guard let onlySource = sources.first else { return releaseWord() }
+        guard sources.count > 1 else { return openInWordlist(onlySource) }
 
+        // Several words on screen: let them settle back while the user picks
+        // one, holding playback so they don't switch out under the choice.
+        releaseWord()
+        wasTimerRunningBeforeChoice = timer != nil
+        pauseTimer()
+        wordSourceChoices = sources
+        isChoosingWordSource = true
+    }
+
+    private func openInWordlist(_ source: WordSource) {
         commitSwipe(to: CGSize(width: dragOffset.width, height: -verticalFlyOut)) {
-            selectedWordSource = (csv, word)
-            navigateToCSV = csv
+            selectedWordSource = source
+            navigateToCSV = source.csv
+        }
+    }
+
+    /// The displayed words that can be opened in their wordlist, in screen
+    /// order. A word shown twice from the same wordlist is offered once.
+    private var openableWordSources: [WordSource] {
+        var seen: Set<WordSource> = []
+        return zip(selectedWords, selectedWordSourceCSVs)
+            .compactMap { word, csv in csv.map { WordSource(csv: $0, word: word) } }
+            .filter { seen.insert($0).inserted }
+    }
+
+    /// Finds the wordlist each word comes from. A source that's already known
+    /// is kept while that wordlist is still loaded; words brought back from
+    /// history only carry the words themselves, so theirs are looked up again.
+    private func resolveSourceCSVs(for words: [String], preferring known: [String?] = []) -> [String?] {
+        let candidates = orderedActiveCSVs
+            + allWordsPerCSV.keys.sorted().filter { !orderedActiveCSVs.contains($0) }
+
+        return words.enumerated().map { index, word in
+            if known.indices.contains(index), let csv = known[index], allWordsPerCSV[csv] != nil {
+                return csv
+            }
+            return candidates.first { allWordsPerCSV[$0]?.contains(word) == true }
         }
     }
     
@@ -795,7 +864,7 @@ struct ContentView: View {
             : generateCombinedPoolSelection()
 
         selectedWords = selection.words
-        firstSelectedWordSourceCSV = selection.firstSourceCSV
+        selectedWordSourceCSVs = selection.sourceCSVs
 
         defer { saveHistoryState() }
 
@@ -817,12 +886,12 @@ struct ContentView: View {
         historyIndex = wordHistory.count - 1
     }
     
-    private func generateFairSelection() -> (words: [String], firstSourceCSV: String?) {
+    private func generateFairSelection() -> (words: [String], sourceCSVs: [String?]) {
         let activeCSVNames = orderedActiveCSVs.filter { (wordPools[$0]?.count ?? 0) > 0 }
-        guard !activeCSVNames.isEmpty else { return ([], nil) }
+        guard !activeCSVNames.isEmpty else { return ([], []) }
         
         var results: [String] = []
-        var firstSource: String?
+        var sources: [String?] = []
         
         for _ in 0..<numberOfWordsToShow {
             guard let randomCSV = activeCSVNames.randomElement(),
@@ -833,18 +902,16 @@ struct ContentView: View {
             
             let randomOffset = Int.random(in: 0..<pool.count)
             if let word = pool.word(atEligibleOffset: randomOffset) {
-                if firstSource == nil {
-                    firstSource = randomCSV
-                }
                 results.append(word)
+                sources.append(randomCSV)
             }
         }
         
-        return (results, firstSource)
+        return (results, sources)
     }
     
-    private func generateCombinedPoolSelection() -> (words: [String], firstSourceCSV: String?) {
-        guard totalEligibleWordCount > 0 else { return ([], nil) }
+    private func generateCombinedPoolSelection() -> (words: [String], sourceCSVs: [String?]) {
+        guard totalEligibleWordCount > 0 else { return ([], []) }
         
         let desiredCount = min(numberOfWordsToShow, totalEligibleWordCount)
         var selectedGlobalOffsets = Set<Int>()
@@ -856,18 +923,16 @@ struct ContentView: View {
         let sortedOffsets = selectedGlobalOffsets.sorted()
         
         var results: [String] = []
-        var firstSource: String?
+        var sources: [String?] = []
         
         for globalOffset in sortedOffsets {
             if let resolved = resolveGlobalEligibleOffset(globalOffset) {
-                if firstSource == nil {
-                    firstSource = resolved.csv
-                }
                 results.append(resolved.word)
+                sources.append(resolved.csv)
             }
         }
         
-        return (results, firstSource)
+        return (results, sources)
     }
     
     private func resolveGlobalEligibleOffset(_ globalOffset: Int) -> (csv: String, word: String)? {
@@ -998,7 +1063,7 @@ struct ContentView: View {
     private func saveHistoryState() {
         wordHistoryData = (try? JSONEncoder().encode(wordHistory)) ?? Data()
         savedHistoryIndex = historyIndex
-        savedWordSourceCSV = firstSelectedWordSourceCSV ?? ""
+        savedWordSourceCSVsData = (try? JSONEncoder().encode(selectedWordSourceCSVs)) ?? Data()
     }
 
     private func loadPersistedData() {
@@ -1010,7 +1075,7 @@ struct ContentView: View {
         historyIndex = wordHistory.isEmpty
             ? -1
             : min(max(savedHistoryIndex, 0), wordHistory.count - 1)
-        firstSelectedWordSourceCSV = savedWordSourceCSV.isEmpty ? nil : savedWordSourceCSV
+        selectedWordSourceCSVs = (try? JSONDecoder().decode([String?].self, from: savedWordSourceCSVsData)) ?? []
     }
     
     private func pauseTimer() {

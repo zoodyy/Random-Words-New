@@ -983,7 +983,8 @@ struct WordDefinitionView: View {
 
     /// A horizontally-scrollable row of the currently displayed words. Tapping
     /// one shows its definitions above. Shown only when multiple words are
-    /// displayed.
+    /// displayed. Centred while it fits on screen; once it's wider, it scrolls
+    /// from the first word.
     private var wordPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
@@ -1011,6 +1012,7 @@ struct WordDefinitionView: View {
             }
             .padding(.horizontal, 24)
         }
+        .defaultScrollAnchor(.center, for: .alignment)
         .padding(.bottom, 12)
     }
 
@@ -1021,10 +1023,11 @@ struct WordDefinitionView: View {
         VStack(spacing: 16) {
             VStack(spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(selectedWord)
-                        .font(.largeTitle)
-                        .bold()
-                        .multilineTextAlignment(.center)
+                    SelectableWordTitle(
+                        word: selectedWord,
+                        selection: textSelection,
+                        onDefine: lookUpSelection
+                    )
 
                     if hasPronunciationAudio {
                         Button {
@@ -1310,10 +1313,10 @@ struct WordDefinitionView: View {
         onLookUp([word])
     }
 
-    /// Opens the definition screen for text selected in a definition. A single
-    /// word is looked up on its own. Several are looked up as the whole phrase
-    /// first, since idioms and phrasal verbs have entries of their own, and
-    /// then each word separately in the word picker.
+    /// Opens the definition screen for text selected in the word or its
+    /// definition. A single word is looked up on its own. Several are looked
+    /// up as the whole phrase first, since idioms and phrasal verbs have
+    /// entries of their own, and then each word separately in the word picker.
     private func lookUpSelection(_ selection: String) {
         let edges = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
         let singleWords = selection
