@@ -25,7 +25,13 @@ struct DictView: View {
     @State private var shareItem: ExportShareItem?
     
     @State private var csvPreviewInfo: [String: CSVPreviewInfo] = [:]
-    
+
+    @AppStorage(FavouriteWordlists.storageKey) private var favouriteCSVsData: Data = Data()
+
+    private var favouriteCSVs: Set<String> {
+        FavouriteWordlists.decode(favouriteCSVsData)
+    }
+
     private struct CSVPreviewInfo {
         let count: Int
         let lowerWord: String
@@ -46,35 +52,44 @@ struct DictView: View {
         List {
             ForEach(orderedCSVFiles, id: \.self) { file in
                 VStack(alignment: .leading, spacing: 8) {
-                    
-                    HStack {
-                        Image(systemName: "doc.text")
-                            .foregroundColor(.blue)
-                        
-                        Text(file)
-                        
-                        Spacer()
-                        
+
+                    // The boundary words can run to several lines (long
+                    // phrases), so they toggle the list just like its name.
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(file)
+
+                            if favouriteCSVs.contains(file) {
+                                Image(systemName: "star.fill")
+                                    .imageScale(.small)
+                                    .foregroundColor(.yellow)
+                            }
+
+                            Spacer()
+
+                            if selectedCSVs.contains(file) {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.green)
+                            }
+                        }
+
                         if selectedCSVs.contains(file) {
-                            Image(systemName: "checkmark")
-                                .foregroundColor(.green)
+                            let range = csvRanges[file] ?? (0.0, 1.0)
+                            let preview = csvPreviewInfo[file]
+                            let lowerWord = preview?.lowerWord ?? "-"
+                            let upperWord = preview?.upperWord ?? "-"
+
+                            Text("\(Int(range.0 * 100))% (\(lowerWord))  -  \(Int(range.1 * 100))% (\(upperWord))")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
                         }
                     }
                     .contentShape(Rectangle())
                     .onTapGesture {
                         toggleSelection(file)
                     }
-                    
+
                     if selectedCSVs.contains(file) {
-                        let range = csvRanges[file] ?? (0.0, 1.0)
-                        let preview = csvPreviewInfo[file]
-                        let lowerWord = preview?.lowerWord ?? "-"
-                        let upperWord = preview?.upperWord ?? "-"
-                        
-                        Text("\(Int(range.0 * 100))% (\(lowerWord))  -  \(Int(range.1 * 100))% (\(upperWord))")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                        
                         RangeSlider(
                             lowerValue: Binding(
                                 get: { csvRanges[file]?.0 ?? 0.0 },
@@ -99,6 +114,22 @@ struct DictView: View {
                     }
                 }
                 .swipeActions(edge: .trailing) {
+                    // The first action sits on the outer edge, so it's the one
+                    // a full swipe triggers.
+                    Button {
+                        toggleFavourite(file)
+                    } label: {
+                        if favouriteCSVs.contains(file) {
+                            Label("Unfavourite", systemImage: "star.fill")
+                        } else {
+                            Label("Favourite", systemImage: "star")
+                                // Swipe actions fill their symbols by default,
+                                // which would make this look favourited already.
+                                .environment(\.symbolVariants, .none)
+                        }
+                    }
+                    .tint(.yellow)
+
                     Button {
                         csvToEdit = file
                     } label: {
@@ -238,9 +269,24 @@ struct DictView: View {
                 shareSelectedCSVs.remove(deletedName)
                 csvRanges[deletedName] = nil
                 csvPreviewInfo[deletedName] = nil
+                if favouriteCSVs.contains(deletedName) {
+                    var favourites = favouriteCSVs
+                    favourites.remove(deletedName)
+                    favouriteCSVsData = FavouriteWordlists.encode(favourites)
+                }
                 sliderChangeTrigger += 1
             }
         }
+    }
+
+    private func toggleFavourite(_ file: String) {
+        var favourites = favouriteCSVs
+        if favourites.contains(file) {
+            favourites.remove(file)
+        } else {
+            favourites.insert(file)
+        }
+        favouriteCSVsData = FavouriteWordlists.encode(favourites)
     }
     
     private func createExportFolder() throws -> URL {

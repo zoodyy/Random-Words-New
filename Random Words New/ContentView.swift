@@ -78,7 +78,8 @@ struct ContentView: View {
     @AppStorage("wordHistoryData") private var wordHistoryData: Data = Data()
     @AppStorage("savedHistoryIndex") private var savedHistoryIndex: Int = -1
     @AppStorage("savedWordSourceCSVsData") private var savedWordSourceCSVsData: Data = Data()
-    
+    @AppStorage(FavouriteWordlists.storageKey) private var favouriteCSVsData: Data = Data()
+
     @State private var selectedCSVs: Set<String> = []
     @State private var csvRanges: [String: RangePair] = [:]
     @State private var selectedWords: [String] = []
@@ -128,6 +129,13 @@ struct ContentView: View {
     /// puts it back before leaving, so it's remembered just like a direct
     /// swipe up.
     @State private var wasTimerRunningBeforeChoice = false
+    /// Set while the user picks which of several favourite lists the words
+    /// go in.
+    @State private var favouritePickerTarget: FavouritePickerTarget?
+    /// The lists the open picker has put the words in, so closing it can
+    /// move on to the next word just like a left swipe with one favourite.
+    @State private var favouriteListsAddedTo: Set<String> = []
+    @State private var wasTimerRunningBeforeFavouritePicker = false
     @State private var definitionTarget: DefinitionTarget?
     
     @State private var wordHistory: [[String]] = []
@@ -265,8 +273,11 @@ struct ContentView: View {
     /// dim them.
     private var unavailableSwipeDirections: Set<WordSwipeDirection> {
         var unavailable: Set<WordSwipeDirection> = []
+        if selectedWords.isEmpty || FavouriteWordlists.decode(favouriteCSVsData).isEmpty {
+            unavailable.insert(.left)
+        }
         if selectedWords.isEmpty {
-            unavailable.formUnion([.left, .up, .down])
+            unavailable.formUnion([.up, .down])
         }
         if wordHistory.isEmpty || historyIndex <= 0 {
             unavailable.insert(.right)
@@ -344,6 +355,15 @@ struct ContentView: View {
                     }
                 }) { target in
                     DefinitionSheet(words: target.words)
+                }
+                .sheet(item: $favouritePickerTarget, onDismiss: finishFavouritePicking) { target in
+                    FavouriteListPicker(target: target) { list, added in
+                        if added {
+                            favouriteListsAddedTo.insert(list)
+                        } else {
+                            favouriteListsAddedTo.remove(list)
+                        }
+                    }
                 }
                 .onAppear {
                     syncDefaultWordScreenStyle()
@@ -715,11 +735,69 @@ struct ContentView: View {
     private func handleLeftSwipe() {
         guard !selectedWords.isEmpty else { return releaseWord() }
 
-        commitSwipe(to: CGSize(width: -horizontalFlyOut, height: dragOffset.height)) {
-            addToOwnVocab(selectedWords)
-            showToast(selectedWords.count == 1 ? "Added word to ownVocab" : "Added words to ownVocab")
+        let favourites = favouriteCSVs
+        guard let onlyFavourite = favourites.first else {
+            showToast("No favourite word lists")
+            return releaseWord()
+        }
+
+        guard favourites.count > 1 else {
+            commitSwipe(to: CGSize(width: -horizontalFlyOut, height: dragOffset.height)) {
+                WordlistFile.add(selectedWords, toListNamed: onlyFavourite)
+                showToast(addedToFavouritesMessage(lists: [onlyFavourite]))
+                selectRandomWords(recordHistory: true)
+            }
+            return
+        }
+
+        // Several favourites: let the word settle back while the user picks
+        // the lists, holding playback so it doesn't switch out under them.
+        releaseWord()
+        wasTimerRunningBeforeFavouritePicker = timer != nil
+        pauseTimer()
+        favouriteListsAddedTo = []
+
+        let words = selectedWords
+        favouritePickerTarget = FavouritePickerTarget(
+            words: words,
+            lists: favourites,
+            containedWords: Dictionary(uniqueKeysWithValues: favourites.map { list in
+                (list, WordlistFile.lines(matching: Set(words), inListNamed: list))
+            })
+        )
+    }
+
+    /// Once the picker closes, words that went into a list leave the screen
+    /// like they do with a single favourite. Taking them out of lists, or
+    /// changing nothing, leaves them where they are.
+    private func finishFavouritePicking() {
+        let addedTo = favouriteListsAddedTo.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        favouriteListsAddedTo = []
+
+        if wasTimerRunningBeforeFavouritePicker {
+            wasTimerRunningBeforeFavouritePicker = false
+            resumeTimer()
+        }
+
+        guard !addedTo.isEmpty else { return }
+
+        commitSwipe(to: CGSize(width: -horizontalFlyOut, height: 0)) {
+            showToast(addedToFavouritesMessage(lists: addedTo))
             selectRandomWords(recordHistory: true)
         }
+    }
+
+    private func addedToFavouritesMessage(lists: [String]) -> String {
+        let words = selectedWords.count == 1 ? "word" : "words"
+        let destination = lists.count == 1 ? lists[0] : "\(lists.count) lists"
+        return "Added \(words) to \(destination)"
+    }
+
+    /// The favourite lists that still exist, in the order the picker shows them.
+    private var favouriteCSVs: [String] {
+        FavouriteWordlists.decode(favouriteCSVsData)
+            .filter { WordlistFile.readableURL(for: $0) != nil }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
     
     private func handleRightSwipe() {
@@ -793,29 +871,6 @@ struct ContentView: View {
         }
     }
 
-    private func addToOwnVocab(_ wordsToAdd: [String]) {
-        let fileURL = getOwnVocabURL()
-        
-        var existingOrdered: [String] = []
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            existingOrdered = WordlistFile.words(at: fileURL)
-        }
-        
-        for word in wordsToAdd {
-            if !existingOrdered.contains(word) {
-                existingOrdered.append(word)
-            }
-        }
-        
-        let newContent = existingOrdered.joined(separator: "\n")
-        try? newContent.write(to: fileURL, atomically: true, encoding: .utf8)
-    }
-    
-    private func getOwnVocabURL() -> URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ownVocab.csv")
-    }
-    
     @ToolbarContentBuilder
     private func toolbarMenu() -> some ToolbarContent {
         

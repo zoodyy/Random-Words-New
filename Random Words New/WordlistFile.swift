@@ -61,6 +61,104 @@ enum WordlistFile {
         try? words.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
     }
 
+    // MARK: Single words
+
+    /// Which of `candidates` are already lines of the list. Compares the raw
+    /// bytes instead of building a String per line, so asking about a word or
+    /// two stays quick even for the 400k-line bundled lists.
+    static func lines(matching candidates: Set<String>, inListNamed name: String) -> Set<String> {
+        guard !candidates.isEmpty, let url = readableURL(for: name) else { return [] }
+        waitForPendingSaves()
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return [] }
+
+        let targets = candidates.map { (word: $0, bytes: Array($0.utf8)) }
+        var found: Set<String> = []
+
+        data.withUnsafeBytes { raw in
+            guard let rawBase = raw.baseAddress else { return }
+            let base = rawBase.assumingMemoryBound(to: UInt8.self)
+            let count = raw.count
+
+            var lineStart = 0
+            while lineStart <= count, found.count < targets.count {
+                let lineEnd = memchr(rawBase + lineStart, Int32(UInt8(ascii: "\n")), count - lineStart)
+                    .map { rawBase.distance(to: UnsafeRawPointer($0)) } ?? count
+
+                var start = lineStart
+                var end = lineEnd
+                while start < end, isTrimmable(base[end - 1]) { end -= 1 }
+                while start < end, isTrimmable(base[start]) { start += 1 }
+
+                let length = end - start
+                if length > 0 {
+                    for target in targets where target.bytes.count == length && !found.contains(target.word) {
+                        if memcmp(base + start, target.bytes, length) == 0 {
+                            found.insert(target.word)
+                        }
+                    }
+                }
+
+                lineStart = lineEnd + 1
+            }
+        }
+
+        return found
+    }
+
+    /// Appends whichever of `newWords` the list doesn't have yet. Appending
+    /// rather than rewriting the file keeps this instant for the big lists.
+    static func add(_ newWords: [String], toListNamed name: String) {
+        let present = lines(matching: Set(newWords), inListNamed: name)
+        var missing: [String] = []
+        for word in newWords where !present.contains(word) && !missing.contains(word) {
+            missing.append(word)
+        }
+        guard !missing.isEmpty else { return }
+
+        let url = documentsURL(for: name)
+        let bundledURL = BundledWordlists.url(named: name)
+        saveQueue.sync { append(missing, to: url, seededFrom: bundledURL) }
+    }
+
+    /// Takes every line that is one of `wordsToRemove` out of the list.
+    static func remove(_ wordsToRemove: Set<String>, fromListNamed name: String) {
+        let words = words(named: name)
+        let remaining = words.filter { !wordsToRemove.contains($0) }
+        guard remaining.count < words.count else { return }
+        saveInBackground(remaining, to: documentsURL(for: name))
+    }
+
+    private nonisolated static func append(_ words: [String], to url: URL, seededFrom bundledURL: URL?) {
+        let fileManager = FileManager.default
+
+        if !fileManager.fileExists(atPath: url.path) {
+            // The first change to a bundled list starts from its contents,
+            // just like opening it in the editor does.
+            if let bundledURL {
+                try? fileManager.copyItem(at: bundledURL, to: url)
+            }
+            if !fileManager.fileExists(atPath: url.path) {
+                fileManager.createFile(atPath: url.path, contents: nil)
+            }
+        }
+
+        guard let handle = try? FileHandle(forUpdating: url) else { return }
+        defer { try? handle.close() }
+
+        guard let end = try? handle.seekToEnd() else { return }
+
+        // Saved lists don't end in a newline, so one usually goes in first.
+        var needsSeparator = false
+        if end > 0 {
+            try? handle.seek(toOffset: end - 1)
+            needsSeparator = (try? handle.read(upToCount: 1)) != Data([UInt8(ascii: "\n")])
+            _ = try? handle.seekToEnd()
+        }
+
+        let text = (needsSeparator ? "\n" : "") + words.joined(separator: "\n")
+        try? handle.write(contentsOf: Data(text.utf8))
+    }
+
     static func words(in data: Data) -> [String] {
         var result: [String] = []
         // Wordlist lines average well under 16 bytes; over-reserving a little is

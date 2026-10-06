@@ -13,7 +13,7 @@ enum WordSwipeDirection {
         switch self {
         case .up:    return "Wordlist"
         case .down:  return "Definition"
-        case .left:  return "ownVocab"
+        case .left:  return "Favourite"
         case .right: return "Back"
         }
     }
