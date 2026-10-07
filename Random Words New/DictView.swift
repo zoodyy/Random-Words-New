@@ -119,7 +119,6 @@ struct DictView: View {
                                 }
                             )
                         )
-                        .frame(height: 32)
                     }
                 }
                 .swipeActions(edge: .trailing) {
@@ -733,71 +732,165 @@ private struct CenteredNavigationTitle: View {
     }
 }
 
-private struct RangeSlider: View {
-    
+/// A slider with a thumb at each end of the chosen part of 0...1.
+private struct RangeSlider: UIViewRepresentable {
+
     @Binding var lowerValue: Double
     @Binding var upperValue: Double
-    
-    private let thumbSize: CGFloat = 20
-    private let trackHeight: CGFloat = 4
-    
-    var body: some View {
-        GeometryReader { geometry in
-            let availableWidth = max(geometry.size.width - thumbSize, 1)
-            let trackY = (geometry.size.height - trackHeight) / 2
-            let thumbY = (geometry.size.height - thumbSize) / 2
-            
-            let lowerThumbX = CGFloat(lowerValue) * availableWidth
-            let upperThumbX = CGFloat(upperValue) * availableWidth
-            
-            let lowerCenterX = lowerThumbX + thumbSize / 2
-            let upperCenterX = upperThumbX + thumbSize / 2
-            
-            ZStack(alignment: .topLeading) {
-                Capsule()
-                    .fill(Color(.systemGray4))
-                    .frame(width: availableWidth, height: trackHeight)
-                    .offset(x: thumbSize / 2, y: trackY)
-                
-                Capsule()
-                    .fill(Color.accentColor)
-                    .frame(width: max(upperCenterX - lowerCenterX, 0), height: trackHeight)
-                    .offset(x: lowerCenterX, y: trackY)
-                
-                Circle()
-                    .fill(Color.white)
-                    .overlay(
-                        Circle()
-                            .stroke(Color.accentColor, lineWidth: 2)
-                    )
-                    .frame(width: thumbSize, height: thumbSize)
-                    .offset(x: lowerThumbX, y: thumbY)
-                    .gesture(
-                        DragGesture()
-                            .onChanged { value in
-                                let newX = min(max(0, value.location.x - thumbSize / 2), upperThumbX)
-                                let newValue = Double(newX / availableWidth)
-                                lowerValue = newValue
-                            }
-                    )
-                
-                Circle()
-                    .fill(Color.white)
-                    .overlay(
-                        Circle()
-                            .stroke(Color.accentColor, lineWidth: 2)
-                    )
-                    .frame(width: thumbSize, height: thumbSize)
-                    .offset(x: upperThumbX, y: thumbY)
-                    .gesture(
-                        DragGesture()
-                            .onChanged { value in
-                                let newX = max(min(availableWidth, value.location.x - thumbSize / 2), lowerThumbX)
-                                let newValue = Double(newX / availableWidth)
-                                upperValue = newValue
-                            }
-                    )
-            }
+
+    func makeUIView(context: Context) -> RangeSliderView {
+        RangeSliderView()
+    }
+
+    func updateUIView(_ view: RangeSliderView, context: Context) {
+        view.setValues(lower: Float(lowerValue), upper: Float(upperValue))
+        view.lowerValueChanged = { lowerValue = Double($0) }
+        view.upperValueChanged = { upperValue = Double($0) }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: RangeSliderView, context: Context) -> CGSize? {
+        guard let width = proposal.width else { return nil }
+        return CGSize(width: width, height: uiView.intrinsicContentSize.height)
+    }
+}
+
+/// Two system sliders sharing one track, as UIKit has no range slider.
+///
+/// The sliders lie on top of each other showing only their thumbs, over a
+/// track filled in between them. A touch goes to the thumb under it, and
+/// neither thumb can be dragged past the other.
+private final class RangeSliderView: UIView {
+
+    var lowerValueChanged: ((Float) -> Void)?
+    var upperValueChanged: ((Float) -> Void)?
+
+    private let lowerSlider = UISlider()
+    private let upperSlider = UISlider()
+
+    /// Stands in for the sliders' own tracks: they're see-through, so two
+    /// stacked would darken each other. (A track configuration's
+    /// `neutralValue` can start the fill at the lower thumb, but iOS 26.2
+    /// doesn't redraw it when that changes.)
+    private let track = UIView()
+    private let fill = UIView()
+
+    /// Thumbs are smaller than a comfortable touch target, so they catch
+    /// touches this far around them too.
+    private let minimumTouchSize: CGFloat = 44
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+
+        // The colours of the system slider's track.
+        track.backgroundColor = UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(white: 1, alpha: 0.1)
+                : UIColor(white: 0, alpha: 0.1)
         }
+        fill.backgroundColor = .tintColor
+        for view in [track, fill] {
+            view.layer.cornerCurve = .continuous
+        }
+        track.clipsToBounds = true
+        track.addSubview(fill)
+        addSubview(track)
+
+        upperSlider.value = 1
+        upperSlider.accessibilityLabel = "Range end"
+        upperSlider.addTarget(self, action: #selector(upperSliderChanged), for: .valueChanged)
+
+        lowerSlider.accessibilityLabel = "Range start"
+        lowerSlider.addTarget(self, action: #selector(lowerSliderChanged), for: .valueChanged)
+
+        for slider in [upperSlider, lowerSlider] {
+            slider.minimumTrackTintColor = .clear
+            slider.maximumTrackTintColor = .clear
+            addSubview(slider)
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: upperSlider.intrinsicContentSize.height)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        lowerSlider.frame = bounds
+        upperSlider.frame = bounds
+        track.frame = upperSlider.convert(upperSlider.trackRect(forBounds: upperSlider.bounds), to: self)
+        track.layer.cornerRadius = track.bounds.height / 2
+        updateFill()
+    }
+
+    func setValues(lower: Float, upper: Float) {
+        // Assigning a value, even an unchanged one, can disturb a drag.
+        if lowerSlider.value != lower { lowerSlider.value = lower }
+        if upperSlider.value != upper { upperSlider.value = upper }
+        updateFill()
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return nil }
+
+        let slider = slider(for: point)
+        let thumb = thumbFrame(of: slider)
+        let touchArea = thumb.insetBy(
+            dx: min(thumb.width - minimumTouchSize, 0) / 2,
+            dy: min(thumb.height - minimumTouchSize, 0) / 2
+        )
+        // Touches away from the thumbs fall through, so the row still swipes.
+        guard touchArea.contains(point) else { return nil }
+        return slider.hitTest(convert(point, to: slider), with: event) ?? slider
+    }
+
+    /// The slider whose thumb a touch at `point` is meant for.
+    private func slider(for point: CGPoint) -> UISlider {
+        let lowerX = thumbFrame(of: lowerSlider).midX
+        let upperX = thumbFrame(of: upperSlider).midX
+
+        guard abs(upperX - lowerX) < 1 else {
+            return abs(point.x - lowerX) <= abs(point.x - upperX) ? lowerSlider : upperSlider
+        }
+
+        // The thumbs are stacked: hand out one that can still move, picking by
+        // the side of the thumb that was touched when both can.
+        if upperSlider.value >= upperSlider.maximumValue { return lowerSlider }
+        if lowerSlider.value <= lowerSlider.minimumValue { return upperSlider }
+        return point.x < lowerX ? lowerSlider : upperSlider
+    }
+
+    private func thumbFrame(of slider: UISlider) -> CGRect {
+        let bounds = slider.bounds
+        let track = slider.trackRect(forBounds: bounds)
+        let thumb = slider.thumbRect(forBounds: bounds, trackRect: track, value: slider.value)
+        return slider.convert(thumb, to: self)
+    }
+
+    @objc private func lowerSliderChanged() {
+        if lowerSlider.value > upperSlider.value {
+            lowerSlider.value = upperSlider.value
+        }
+        updateFill()
+        lowerValueChanged?(lowerSlider.value)
+    }
+
+    @objc private func upperSliderChanged() {
+        if upperSlider.value < lowerSlider.value {
+            upperSlider.value = lowerSlider.value
+        }
+        updateFill()
+        upperValueChanged?(upperSlider.value)
+    }
+
+    /// Fills the track from one thumb's centre to the other's.
+    private func updateFill() {
+        let lowerX = thumbFrame(of: lowerSlider).midX - track.frame.minX
+        let upperX = thumbFrame(of: upperSlider).midX - track.frame.minX
+        fill.frame = CGRect(x: lowerX, y: 0, width: max(upperX - lowerX, 0), height: track.bounds.height)
+        fill.layer.cornerRadius = fill.bounds.height / 2
     }
 }
