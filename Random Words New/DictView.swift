@@ -26,6 +26,8 @@ struct DictView: View {
     
     @State private var csvPreviewInfo: [String: CSVPreviewInfo] = [:]
 
+    @State private var listMidX: CGFloat?
+
     @AppStorage(FavouriteWordlists.storageKey) private var favouriteCSVsData: Data = Data()
 
     private var favouriteCSVs: Set<String> {
@@ -39,9 +41,16 @@ struct DictView: View {
     }
     
     private var orderedCSVFiles: [String] {
+        let favourites = favouriteCSVs
         let selected = csvFiles.filter { selectedCSVs.contains($0) }
         let unselected = csvFiles.filter { !selectedCSVs.contains($0) }
-        return selected + unselected
+
+        // Favourites lead within each group, but never rise above a selected list.
+        func favouritesFirst(_ files: [String]) -> [String] {
+            files.filter { favourites.contains($0) } + files.filter { !favourites.contains($0) }
+        }
+
+        return favouritesFirst(selected) + favouritesFirst(unselected)
     }
     
     private var activeCSVFiles: [String] {
@@ -139,8 +148,18 @@ struct DictView: View {
                 }
             }
         }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.frame(in: .global).midX
+        } action: { midX in
+            listMidX = midX
+        }
         .navigationTitle("Select Word Lists")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                CenteredNavigationTitle(title: "Select Word Lists", centerX: listMidX)
+            }
+
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
                     shareSelectedCSVs = Set(orderedCSVFiles)
@@ -667,6 +686,51 @@ private struct ActivityView: UIViewControllerRepresentable {
     }
     
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) { }
+}
+
+/// A navigation bar title that stays centred on screen.
+///
+/// UIKit only centres a title while it keeps a wide margin to the bar
+/// buttons. The share and add buttons are wide enough that on a 6.1" iPhone
+/// it left-aligns the title instead, so this asks for the whole space between
+/// the buttons and shifts the text back to the middle, as far as it fits.
+private struct CenteredNavigationTitle: View {
+
+    let title: String
+    /// The screen's centre, in the global coordinate space. Twice this is
+    /// also the screen's width.
+    let centerX: CGFloat?
+
+    @State private var textWidth: CGFloat = 0
+    @State private var slotFrame: CGRect = .zero
+
+    private var offset: CGFloat {
+        guard let centerX else { return 0 }
+        let room = max((slotFrame.width - textWidth) / 2, 0)
+        return min(max(centerX - slotFrame.midX, -room), room)
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.headline)
+            // Like the system title, which keeps its size at any text size.
+            .dynamicTypeSize(...DynamicTypeSize.large)
+            .lineLimit(1)
+            .accessibilityAddTraits(.isHeader)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.width
+            } action: { width in
+                textWidth = width
+            }
+            .offset(x: offset)
+            // UIKit shrinks a screen-wide title to the space between the buttons.
+            .frame(idealWidth: (centerX ?? 0) * 2, maxWidth: .infinity)
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .global)
+            } action: { frame in
+                slotFrame = frame
+            }
+    }
 }
 
 private struct RangeSlider: View {
