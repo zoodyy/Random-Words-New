@@ -125,7 +125,6 @@ struct ContentView: View {
     @State private var selectedWords: [String] = []
     @State private var timer: Timer?
     @State private var nextWordDate: Date?
-    @State private var sliderChangeTrigger = 0
     @State private var allWordsPerCSV: [String: [String]] = [:]
     /// Worked out from `allWordsPerCSV` the first time the minimum word length
     /// applies to a list.
@@ -462,8 +461,9 @@ struct ContentView: View {
                 .onChange(of: csvRanges) { _ in
                     guard !isRestoringState else { return }
                     saveRanges()
+                    // A new range only applies from the next word on: the word
+                    // on screen and the history stay as they are.
                     rebuildWordPools()
-                    selectRandomWords(recordHistory: true)
                 }
                 .onChange(of: minLengthExcludedCSVs) { _ in
                     guard !isRestoringState else { return }
@@ -960,8 +960,7 @@ struct ContentView: View {
                                 RangePair(lower: $0.0, upper: $0.1)
                             }
                         }
-                    ),
-                    sliderChangeTrigger: $sliderChangeTrigger
+                    )
                 )
             ) {
                 Image(systemName: "book")

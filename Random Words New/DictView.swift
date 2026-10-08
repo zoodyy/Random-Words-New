@@ -7,7 +7,6 @@ struct DictView: View {
     @Binding var selectedCSVs: Set<String>
     @Binding var words: [String]
     @Binding var csvRanges: [String: (Double, Double)]
-    @Binding var sliderChangeTrigger: Int
     
     @State private var csvFiles: [String] = []
     
@@ -106,7 +105,6 @@ struct DictView: View {
                                     let upper = csvRanges[file]?.1 ?? 1.0
                                     csvRanges[file] = (min(newValue, upper), upper)
                                     refreshPreviewInfo(for: file, reusingLines: true)
-                                    sliderChangeTrigger += 1
                                 }
                             ),
                             upperValue: Binding(
@@ -115,7 +113,6 @@ struct DictView: View {
                                     let lower = csvRanges[file]?.0 ?? 0.0
                                     csvRanges[file] = (lower, max(newValue, lower))
                                     refreshPreviewInfo(for: file, reusingLines: true)
-                                    sliderChangeTrigger += 1
                                 }
                             )
                         )
@@ -292,7 +289,6 @@ struct DictView: View {
                     favourites.remove(deletedName)
                     favouriteCSVsData = FavouriteWordlists.encode(favourites)
                 }
-                sliderChangeTrigger += 1
             }
         }
     }
@@ -361,7 +357,6 @@ struct DictView: View {
         refreshPreviewInfo(for: trimmed)
         
         newCSVName = ""
-        sliderChangeTrigger += 1
     }
     
     private func handleImport(result: Result<[URL], Error>) {
@@ -397,7 +392,6 @@ struct DictView: View {
             }
             
             refreshAllSelectedPreviewInfo()
-            sliderChangeTrigger += 1
             
         } catch {
             print("Import failed: \(error)")
@@ -634,7 +628,6 @@ struct DictView: View {
             }
             refreshPreviewInfo(for: file)
         }
-        sliderChangeTrigger += 1
     }
     
     private func refreshAllSelectedPreviewInfo() {
