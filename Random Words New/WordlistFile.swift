@@ -167,36 +167,76 @@ enum WordlistFile {
 
         data.withUnsafeBytes { raw in
             guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-            let count = raw.count
 
-            var lineStart = 0
-            var index = 0
-
-            while index <= count {
-                guard index == count || base[index] == UInt8(ascii: "\n") else {
-                    index += 1
-                    continue
-                }
-
-                var start = lineStart
-                var end = index
-
-                while start < end, isTrimmable(base[end - 1]) { end -= 1 }
-                while start < end, isTrimmable(base[start]) { start += 1 }
-
-                if start < end {
-                    result.append(
-                        String(decoding: UnsafeBufferPointer(start: base + start, count: end - start),
-                               as: UTF8.self)
-                    )
-                }
-
-                lineStart = index + 1
-                index += 1
+            forEachLine(in: raw) { line in
+                result.append(
+                    String(decoding: UnsafeBufferPointer(start: base + line.lowerBound, count: line.count),
+                           as: UTF8.self)
+                )
             }
         }
 
         return result
+    }
+
+    // MARK: Lines by position
+
+    /// Where each line of a wordlist lies in the file, so the few at some
+    /// positions can be read without turning every line into a String. A
+    /// range slider shows the words at its ends on every step, and reading the
+    /// whole of a big list each time made it stutter.
+    struct Lines: RandomAccessCollection {
+
+        private let data: Data
+        private let ranges: [Range<Int>]
+
+        /// Every non-blank line of the wordlist, trimmed, like `words(at:)`.
+        init(at url: URL) {
+            WordlistFile.waitForPendingSaves()
+            // Mapped, so holding on to a big list doesn't keep a copy of it in
+            // memory. Wordlists are only ever replaced or appended to, never
+            // rewritten in place, so the mapping stays valid.
+            let data = (try? Data(contentsOf: url, options: .mappedIfSafe)) ?? Data()
+
+            var ranges: [Range<Int>] = []
+            data.withUnsafeBytes { raw in
+                WordlistFile.forEachLine(in: raw) { ranges.append($0) }
+            }
+
+            self.data = data
+            self.ranges = ranges
+        }
+
+        var startIndex: Int { ranges.startIndex }
+        var endIndex: Int { ranges.endIndex }
+
+        subscript(position: Int) -> String {
+            String(decoding: data[ranges[position]], as: UTF8.self)
+        }
+    }
+
+    /// Calls `body` with the byte range of every non-blank line, trimmed.
+    private static func forEachLine(in raw: UnsafeRawBufferPointer, _ body: (Range<Int>) -> Void) {
+        guard let rawBase = raw.baseAddress else { return }
+        let base = rawBase.assumingMemoryBound(to: UInt8.self)
+        let count = raw.count
+
+        var lineStart = 0
+        while lineStart <= count {
+            let lineEnd = memchr(rawBase + lineStart, Int32(UInt8(ascii: "\n")), count - lineStart)
+                .map { rawBase.distance(to: UnsafeRawPointer($0)) } ?? count
+
+            var start = lineStart
+            var end = lineEnd
+            while start < end, isTrimmable(base[end - 1]) { end -= 1 }
+            while start < end, isTrimmable(base[start]) { start += 1 }
+
+            if start < end {
+                body(start..<end)
+            }
+
+            lineStart = lineEnd + 1
+        }
     }
 
     private static func isTrimmable(_ byte: UInt8) -> Bool {

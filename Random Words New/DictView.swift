@@ -35,7 +35,7 @@ struct DictView: View {
     }
 
     private struct CSVPreviewInfo {
-        let count: Int
+        let lines: WordlistFile.Lines
         let lowerWord: String
         let upperWord: String
     }
@@ -105,7 +105,7 @@ struct DictView: View {
                                 set: { newValue in
                                     let upper = csvRanges[file]?.1 ?? 1.0
                                     csvRanges[file] = (min(newValue, upper), upper)
-                                    refreshPreviewInfo(for: file)
+                                    refreshPreviewInfo(for: file, reusingLines: true)
                                     sliderChangeTrigger += 1
                                 }
                             ),
@@ -114,7 +114,7 @@ struct DictView: View {
                                 set: { newValue in
                                     let lower = csvRanges[file]?.0 ?? 0.0
                                     csvRanges[file] = (lower, max(newValue, lower))
-                                    refreshPreviewInfo(for: file)
+                                    refreshPreviewInfo(for: file, reusingLines: true)
                                     sliderChangeTrigger += 1
                                 }
                             )
@@ -643,12 +643,17 @@ struct DictView: View {
         }
     }
     
-    private func refreshPreviewInfo(for file: String) {
+    /// Updates the words shown at the ends of `file`'s range. The list is read
+    /// again to pick up edits, unless `reusingLines`: a slider step only moves
+    /// the range, so it reuses the lines found before and reads just the two
+    /// words.
+    private func refreshPreviewInfo(for file: String, reusingLines: Bool = false) {
         let range = csvRanges[file] ?? (0.0, 1.0)
-        let lines = WordlistFile.words(at: getReadableURL(for: file))
+        let lines = (reusingLines ? csvPreviewInfo[file]?.lines : nil)
+            ?? WordlistFile.Lines(at: getReadableURL(for: file))
         
         guard !lines.isEmpty else {
-            csvPreviewInfo[file] = CSVPreviewInfo(count: 0, lowerWord: "-", upperWord: "-")
+            csvPreviewInfo[file] = CSVPreviewInfo(lines: lines, lowerWord: "-", upperWord: "-")
             return
         }
         
@@ -659,7 +664,7 @@ struct DictView: View {
         let upperWord = lines.indices.contains(upperIndex) ? lines[upperIndex] : "-"
         
         csvPreviewInfo[file] = CSVPreviewInfo(
-            count: lines.count,
+            lines: lines,
             lowerWord: lowerWord,
             upperWord: upperWord
         )

@@ -27,7 +27,7 @@ struct ContentView: View {
         let words: [String]
         let lowerBound: Int
         let upperBound: Int
-        let eligibleIndices: [Int]?
+        let eligibleIndices: ArraySlice<Int>?
         
         var count: Int {
             if let eligibleIndices {
@@ -40,7 +40,7 @@ struct ContentView: View {
             guard offset >= 0, offset < count else { return nil }
             
             if let eligibleIndices {
-                let actualIndex = eligibleIndices[offset]
+                let actualIndex = eligibleIndices[eligibleIndices.startIndex + offset]
                 guard words.indices.contains(actualIndex) else { return nil }
                 return words[actualIndex]
             } else {
@@ -48,6 +48,46 @@ struct ContentView: View {
                 guard words.indices.contains(actualIndex) else { return nil }
                 return words[actualIndex]
             }
+        }
+    }
+
+    /// How many letters each word of a list has, and where the words with
+    /// enough of them are. Counting takes a while for the big lists, and
+    /// moving a range slider rebuilds the pools on every step, so a pool is
+    /// cut out of the words found here instead of checking each one again.
+    private struct WordLengths {
+        private let letterCounts: [Int]
+        private var minimumLength: Int?
+        /// The positions of the words with at least `minimumLength` letters.
+        private var eligibleIndices: [Int] = []
+
+        init(letterCounts: [Int]) {
+            self.letterCounts = letterCounts
+        }
+
+        /// The positions within `range` of the words with at least
+        /// `minimumLength` letters, in order.
+        mutating func eligibleIndices(in range: Range<Int>, minimumLength: Int) -> ArraySlice<Int> {
+            if minimumLength != self.minimumLength {
+                self.minimumLength = minimumLength
+                eligibleIndices = letterCounts.indices.filter { letterCounts[$0] >= minimumLength }
+            }
+            return eligibleIndices[firstEligible(from: range.lowerBound)..<firstEligible(from: range.upperBound)]
+        }
+
+        /// Where in `eligibleIndices` the first position at or after `index` is.
+        private func firstEligible(from index: Int) -> Int {
+            var low = 0
+            var high = eligibleIndices.count
+            while low < high {
+                let middle = (low + high) / 2
+                if eligibleIndices[middle] < index {
+                    low = middle + 1
+                } else {
+                    high = middle
+                }
+            }
+            return low
         }
     }
 
@@ -87,6 +127,9 @@ struct ContentView: View {
     @State private var nextWordDate: Date?
     @State private var sliderChangeTrigger = 0
     @State private var allWordsPerCSV: [String: [String]] = [:]
+    /// Worked out from `allWordsPerCSV` the first time the minimum word length
+    /// applies to a list.
+    @State private var wordLengthsPerCSV: [String: WordLengths] = [:]
     @State private var minLengthExcludedCSVs: Set<String> = []
     
     @State private var wordPools: [String: CSVWordPool] = [:]
@@ -668,8 +711,23 @@ struct ContentView: View {
         return text.map { String($0) }.joined(separator: "\u{200B}")
     }
     
+    private static let letters = CharacterSet.letters
+
+    /// Wordlists are mostly ASCII, whose only letters are A–Z and a–z, so
+    /// those are checked directly: asking `CharacterSet` about every character
+    /// took seconds for the biggest list.
     private func letterCount(of word: String) -> Int {
-        word.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
+        var count = 0
+        for scalar in word.unicodeScalars {
+            if scalar.isASCII {
+                if ("a"..."z").contains(scalar) || ("A"..."Z").contains(scalar) {
+                    count += 1
+                }
+            } else if Self.letters.contains(scalar) {
+                count += 1
+            }
+        }
+        return count
     }
     
     private func showToast(_ message: String) {
@@ -1023,6 +1081,7 @@ struct ContentView: View {
 
     private func reloadCSVContents() {
         allWordsPerCSV.removeAll()
+        wordLengthsPerCSV.removeAll()
         
         for csv in selectedCSVs {
             let words = WordlistFile.words(named: csv)
@@ -1038,6 +1097,7 @@ struct ContentView: View {
         var newPools: [String: CSVWordPool] = [:]
         var newOrderedActiveCSVs: [String] = []
         var newTotalEligibleWordCount = 0
+        var newWordLengths = wordLengthsPerCSV
         
         for csv in selectedCSVs {
             guard let range = csvRanges[csv],
@@ -1062,14 +1122,9 @@ struct ContentView: View {
                     eligibleIndices: nil
                 )
             } else {
-                var indices: [Int] = []
-                indices.reserveCapacity(upper - lower)
-                
-                for index in lower..<upper {
-                    if letterCount(of: words[index]) >= minimumWordLength {
-                        indices.append(index)
-                    }
-                }
+                var lengths = newWordLengths[csv] ?? WordLengths(letterCounts: words.map(letterCount))
+                let indices = lengths.eligibleIndices(in: lower..<upper, minimumLength: minimumWordLength)
+                newWordLengths[csv] = lengths
                 
                 pool = CSVWordPool(
                     words: words,
@@ -1089,6 +1144,7 @@ struct ContentView: View {
         wordPools = newPools
         orderedActiveCSVs = newOrderedActiveCSVs
         totalEligibleWordCount = newTotalEligibleWordCount
+        wordLengthsPerCSV = newWordLengths
     }
     
     private func updateTimer() {
