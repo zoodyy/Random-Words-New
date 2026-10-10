@@ -96,6 +96,11 @@ struct DictView: View {
                     .onTapGesture {
                         toggleSelection(file)
                     }
+                    // Not on the whole row: holding a slider thumb still
+                    // before dragging it would count as a long press too.
+                    .onLongPressGesture {
+                        csvToEdit = file
+                    }
 
                     if selectedCSVs.contains(file) {
                         RangeSlider(
@@ -119,8 +124,6 @@ struct DictView: View {
                     }
                 }
                 .swipeActions(edge: .trailing) {
-                    // The first action sits on the outer edge, so it's the one
-                    // a full swipe triggers.
                     Button {
                         toggleFavourite(file)
                     } label: {
@@ -134,13 +137,9 @@ struct DictView: View {
                         }
                     }
                     .tint(.yellow)
-
-                    Button {
-                        csvToEdit = file
-                    } label: {
-                        Label("Edit", systemImage: "pencil")
-                    }
-                    .tint(.orange)
+                }
+                .accessibilityAction(named: "Edit") {
+                    csvToEdit = file
                 }
             }
         }
