@@ -18,6 +18,19 @@ enum FavouriteWordlists {
     static func encode(_ favourites: Set<String>) -> Data {
         (try? JSONEncoder().encode(favourites)) ?? Data()
     }
+
+    /// The favourite lists that still exist, in the order the picker shows them.
+    static func existingLists(in data: Data) -> [String] {
+        decode(data)
+            .filter { WordlistFile.readableURL(for: $0) != nil }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    static func addedMessage(wordCount: Int, lists: [String]) -> String {
+        let words = wordCount == 1 ? "word" : "words"
+        let destination = lists.count == 1 ? lists[0] : "\(lists.count) lists"
+        return "Added \(words) to \(destination)"
+    }
 }
 
 /// The words being saved after a left swipe with several favourite lists,
@@ -27,6 +40,14 @@ struct FavouritePickerTarget: Identifiable {
     let words: [String]
     let lists: [String]
     let containedWords: [String: Set<String>]
+
+    init(words: [String], lists: [String]) {
+        self.words = words
+        self.lists = lists
+        containedWords = Dictionary(uniqueKeysWithValues: lists.map { list in
+            (list, WordlistFile.lines(matching: Set(words), inListNamed: list))
+        })
+    }
 }
 
 /// Lets the user put the words into any of their favourite lists, or take

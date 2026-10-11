@@ -873,6 +873,17 @@ struct DefinitionSheet: View {
     let words: [String]
     @State private var path: [DefinitionPage] = []
 
+    @AppStorage(FavouriteWordlists.storageKey) private var favouriteCSVsData: Data = Data()
+    /// Set while the user picks which of several favourite lists the selected
+    /// text goes in.
+    @State private var favouritePickerTarget: FavouritePickerTarget?
+    /// The lists the open picker has put the text in, so closing it can say
+    /// so just like on the word screen.
+    @State private var favouriteListsAddedTo: Set<String> = []
+
+    @State private var toastMessage: String?
+    @State private var toastID = 0
+
     var body: some View {
         NavigationStack(path: $path) {
             definitionScreen(for: words)
@@ -881,11 +892,78 @@ struct DefinitionSheet: View {
                 }
                 .background(ContentPopGestureDisabler())
         }
+        .sheet(item: $favouritePickerTarget, onDismiss: finishFavouritePicking) { target in
+            FavouriteListPicker(target: target) { list, added in
+                if added {
+                    favouriteListsAddedTo.insert(list)
+                } else {
+                    favouriteListsAddedTo.remove(list)
+                }
+            }
+        }
     }
 
-    private func definitionScreen(for words: [String]) -> WordDefinitionView {
+    private func definitionScreen(for words: [String]) -> some View {
         WordDefinitionView(words: words) { lookedUpWords in
             path.append(DefinitionPage(words: lookedUpWords))
+        } onFavourite: { word in
+            favourite(word)
+        }
+        .toolbar {
+            // The sheet has no title, so its toasts show where one would be.
+            ToolbarItem(placement: .principal) {
+                if let toastMessage {
+                    Text(toastMessage)
+                        .font(.footnote)
+                        .foregroundColor(.gray)
+                        .lineLimit(1)
+                        .transition(.opacity)
+                }
+            }
+        }
+    }
+
+    /// Saves `word` to the favourite lists just like a left swipe on the word
+    /// screen would if it were the random word, which stays as it is.
+    private func favourite(_ word: String) {
+        let favourites = FavouriteWordlists.existingLists(in: favouriteCSVsData)
+        guard let onlyFavourite = favourites.first else {
+            showToast("No favourite word lists")
+            return
+        }
+
+        guard favourites.count > 1 else {
+            WordlistFile.add([word], toListNamed: onlyFavourite)
+            showToast(FavouriteWordlists.addedMessage(wordCount: 1, lists: [onlyFavourite]))
+            return
+        }
+
+        favouriteListsAddedTo = []
+        favouritePickerTarget = FavouritePickerTarget(words: [word], lists: favourites)
+    }
+
+    private func finishFavouritePicking() {
+        let addedTo = favouriteListsAddedTo.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        favouriteListsAddedTo = []
+
+        guard !addedTo.isEmpty else { return }
+        showToast(FavouriteWordlists.addedMessage(wordCount: 1, lists: addedTo))
+    }
+
+    private func showToast(_ message: String) {
+        toastID += 1
+        let currentID = toastID
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            toastMessage = message
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            // Only hide if no newer toast has replaced this one.
+            guard toastID == currentID else { return }
+            withAnimation(.easeInOut(duration: 0.3)) {
+                toastMessage = nil
+            }
         }
     }
 }
@@ -917,12 +995,15 @@ struct WordDefinitionView: View {
     @State private var selectedWord: String
     /// Opens another definition screen for the given words.
     let onLookUp: ([String]) -> Void
+    /// Saves the given text to the favourite lists.
+    let onFavourite: (String) -> Void
 
-    init(words: [String], onLookUp: @escaping ([String]) -> Void) {
+    init(words: [String], onLookUp: @escaping ([String]) -> Void, onFavourite: @escaping (String) -> Void) {
         let cleaned = words.isEmpty ? [""] : words
         self.words = cleaned
         _selectedWord = State(initialValue: cleaned[0])
         self.onLookUp = onLookUp
+        self.onFavourite = onFavourite
     }
 
     @State private var entries: [DictionaryEntry]?
@@ -1026,7 +1107,8 @@ struct WordDefinitionView: View {
                     SelectableWordTitle(
                         word: selectedWord,
                         selection: textSelection,
-                        onDefine: lookUpSelection
+                        onDefine: lookUpSelection,
+                        onFavourite: favouriteSelection
                     )
 
                     if hasPronunciationAudio {
@@ -1072,7 +1154,8 @@ struct WordDefinitionView: View {
                             definition: entry.definition,
                             example: entry.example,
                             selection: textSelection,
-                            onDefine: lookUpSelection
+                            onDefine: lookUpSelection,
+                            onFavourite: favouriteSelection
                         )
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 24)
@@ -1318,22 +1401,38 @@ struct WordDefinitionView: View {
     /// up as the whole phrase first, since idioms and phrasal verbs have
     /// entries of their own, and then each word separately in the word picker.
     private func lookUpSelection(_ selection: String) {
-        let edges = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
         let singleWords = selection
             .split(whereSeparator: \.isWhitespace)
-            .map { $0.trimmingCharacters(in: edges) }
+            .map { $0.trimmingCharacters(in: Self.selectionEdges) }
             .filter { !$0.isEmpty }
         guard singleWords.count > 1 else {
             if !singleWords.isEmpty { onLookUp(singleWords) }
             return
         }
 
-        let phrase = selection
+        var seen: Set<String> = []
+        onLookUp(([Self.phrase(from: selection)] + singleWords).filter { seen.insert($0.lowercased()).inserted })
+    }
+
+    /// Saves text selected in the word or its definition to the favourite
+    /// lists as one entry, the way a left swipe saves the random word.
+    private func favouriteSelection(_ selection: String) {
+        let phrase = Self.phrase(from: selection)
+        guard !phrase.isEmpty else { return }
+        onFavourite(phrase)
+    }
+
+    /// What a selection can pick up around the text itself, like the quotes
+    /// around an example or a full stop.
+    private static let selectionEdges = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+
+    /// The selected text on a single line, without anything picked up at its
+    /// edges.
+    private static func phrase(from selection: String) -> String {
+        selection
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
-            .trimmingCharacters(in: edges)
-        var seen: Set<String> = []
-        onLookUp(([phrase] + singleWords).filter { seen.insert($0.lowercased()).inserted })
+            .trimmingCharacters(in: selectionEdges)
     }
 
     private func addDefinition(wordType: String, definition: String, example: String, phonetic: String) {

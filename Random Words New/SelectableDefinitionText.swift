@@ -37,13 +37,16 @@ final class DefinitionTextSelection {
 
 /// A definition and its optional example sentence as text the user can
 /// long-press to select, the way text can be selected on a web page. The edit
-/// menu gains a "Definition" action that looks up whatever is selected.
+/// menu gains a "Definition" action that looks up whatever is selected, and a
+/// "Favourite" action that saves it.
 struct SelectableDefinitionText: UIViewRepresentable {
     let definition: String
     let example: String?
     let selection: DefinitionTextSelection
     /// Called with the selected text when "Definition" is chosen.
     let onDefine: (String) -> Void
+    /// Called with the selected text when "Favourite" is chosen.
+    let onFavourite: (String) -> Void
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -67,6 +70,7 @@ struct SelectableDefinitionText: UIViewRepresentable {
             content: Content(definition: definition, example: example, dynamicTypeSize: dynamicTypeSize),
             selection: selection,
             onDefine: onDefine,
+            onFavourite: onFavourite,
             makeText: attributedText
         )
     }
@@ -117,6 +121,8 @@ struct SelectableWordTitle: View {
     let selection: DefinitionTextSelection
     /// Called with the selected text when "Definition" is chosen.
     let onDefine: (String) -> Void
+    /// Called with the selected text when "Favourite" is chosen.
+    let onFavourite: (String) -> Void
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -127,7 +133,13 @@ struct SelectableWordTitle: View {
         let font = largeTitle.fontDescriptor.withSymbolicTraits(.traitBold)
             .map { UIFont(descriptor: $0, size: 0) } ?? largeTitle
 
-        WordTitleTextView(word: word, font: font, selection: selection, onDefine: onDefine)
+        WordTitleTextView(
+            word: word,
+            font: font,
+            selection: selection,
+            onDefine: onDefine,
+            onFavourite: onFavourite
+        )
             // SwiftUI can't see a text view's baseline, so it's given one here
             // to keep the pronunciation button beside it level with the first
             // line of the word.
@@ -140,6 +152,7 @@ private struct WordTitleTextView: UIViewRepresentable {
     let font: UIFont
     let selection: DefinitionTextSelection
     let onDefine: (String) -> Void
+    let onFavourite: (String) -> Void
 
     struct Content: Hashable {
         let word: String
@@ -159,7 +172,8 @@ private struct WordTitleTextView: UIViewRepresentable {
             textView,
             content: Content(word: word, font: font),
             selection: selection,
-            onDefine: onDefine
+            onDefine: onDefine,
+            onFavourite: onFavourite
         ) {
             let paragraphStyle = NSMutableParagraphStyle()
             paragraphStyle.alignment = .center
@@ -182,11 +196,12 @@ private struct WordTitleTextView: UIViewRepresentable {
     }
 }
 
-/// Shared by the selectable texts: adds "Definition" to their edit menu and
-/// keeps their selections from overlapping.
+/// Shared by the selectable texts: adds "Definition" and "Favourite" to their
+/// edit menu and keeps their selections from overlapping.
 final class SelectableTextCoordinator: NSObject, UITextViewDelegate {
     private var selection: DefinitionTextSelection?
     private var onDefine: (String) -> Void = { _ in }
+    private var onFavourite: (String) -> Void = { _ in }
     private var content: AnyHashable?
 
     func update(
@@ -194,9 +209,11 @@ final class SelectableTextCoordinator: NSObject, UITextViewDelegate {
         content: AnyHashable,
         selection: DefinitionTextSelection,
         onDefine: @escaping (String) -> Void,
+        onFavourite: @escaping (String) -> Void,
         makeText: () -> NSAttributedString
     ) {
         self.onDefine = onDefine
+        self.onFavourite = onFavourite
         self.selection = selection
         selection.register(textView)
 
@@ -222,7 +239,47 @@ final class SelectableTextCoordinator: NSObject, UITextViewDelegate {
             textView?.selectedRange = NSRange(location: 0, length: 0)
             self?.onDefine(selectedText)
         }
-        return UIMenu(children: [define] + suggestedActions)
+        let favourite = UIAction(title: "Favourite", image: UIImage(systemName: "star")) { [weak self, weak textView] _ in
+            textView?.selectedRange = NSRange(location: 0, length: 0)
+            self?.onFavourite(selectedText)
+        }
+        // "Favourite" takes the place of the system's "Look Up", which only
+        // repeats what "Definition" already does.
+        let actions = Self.replacingLookUp(in: suggestedActions, with: favourite)
+            ?? [favourite] + suggestedActions
+        return UIMenu(children: [define] + actions)
+    }
+
+    /// The private action behind the system's "Look Up" command.
+    private static let lookUpAction = Selector(("_define:"))
+
+    /// `elements` with the system's "Look Up" swapped for `replacement`, or nil
+    /// when the menu doesn't offer it. The edit menu leaves out actions put
+    /// inside its own submenus, so `replacement` goes just before the submenu
+    /// "Look Up" was in, which shows it in the same spot.
+    private static func replacingLookUp(in elements: [UIMenuElement], with replacement: UIMenuElement) -> [UIMenuElement]? {
+        for (index, element) in elements.enumerated() {
+            guard let withoutLookUp = removingLookUp(from: element) else { continue }
+            var result = elements
+            result.replaceSubrange(index...index, with: [replacement] + withoutLookUp)
+            return result
+        }
+        return nil
+    }
+
+    /// What `element` becomes without the system's "Look Up", or nil when it
+    /// doesn't contain it.
+    private static func removingLookUp(from element: UIMenuElement) -> [UIMenuElement]? {
+        if let command = element as? UICommand, command.action == lookUpAction { return [] }
+        guard let menu = element as? UIMenu else { return nil }
+
+        for (index, child) in menu.children.enumerated() {
+            guard let withoutLookUp = removingLookUp(from: child) else { continue }
+            var children = menu.children
+            children.replaceSubrange(index...index, with: withoutLookUp)
+            return [menu.replacingChildren(children)]
+        }
+        return nil
     }
 }
 

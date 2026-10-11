@@ -815,14 +815,7 @@ struct ContentView: View {
         pauseTimer()
         favouriteListsAddedTo = []
 
-        let words = selectedWords
-        favouritePickerTarget = FavouritePickerTarget(
-            words: words,
-            lists: favourites,
-            containedWords: Dictionary(uniqueKeysWithValues: favourites.map { list in
-                (list, WordlistFile.lines(matching: Set(words), inListNamed: list))
-            })
-        )
+        favouritePickerTarget = FavouritePickerTarget(words: selectedWords, lists: favourites)
     }
 
     /// Once the picker closes, words that went into a list leave the screen
@@ -846,16 +839,11 @@ struct ContentView: View {
     }
 
     private func addedToFavouritesMessage(lists: [String]) -> String {
-        let words = selectedWords.count == 1 ? "word" : "words"
-        let destination = lists.count == 1 ? lists[0] : "\(lists.count) lists"
-        return "Added \(words) to \(destination)"
+        FavouriteWordlists.addedMessage(wordCount: selectedWords.count, lists: lists)
     }
 
-    /// The favourite lists that still exist, in the order the picker shows them.
     private var favouriteCSVs: [String] {
-        FavouriteWordlists.decode(favouriteCSVsData)
-            .filter { WordlistFile.readableURL(for: $0) != nil }
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        FavouriteWordlists.existingLists(in: favouriteCSVsData)
     }
     
     private func handleRightSwipe() {
