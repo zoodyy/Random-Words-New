@@ -545,6 +545,8 @@ struct ContentView: View {
                                             .multilineTextAlignment(.center)
                                     }
                                 }
+                                .compositingGroup()
+                                .opacity(wordOpacity)
                                 .timerUnderline(
                                     active: isUnderlineIndicator,
                                     color: timerIndicatorColor,
@@ -1218,11 +1220,16 @@ struct ContentView: View {
     
     private var getTextColor: Color {
         // No custom colour picked: keep the original grey-when-paused look.
-        // With a custom colour, dim it while paused so the pause state stays visible.
         if wordTextColorRaw.isEmpty {
             return timer == nil ? Color.gray : Color.primary
         }
-        let custom = Color(hex: wordTextColorRaw)
-        return timer == nil ? custom.opacity(0.5) : custom
+        return Color(hex: wordTextColorRaw)
+    }
+
+    /// With a custom colour, dim the word while paused so the pause state stays
+    /// visible. Applied to the whole word at once (not per glyph) so letters
+    /// that overlap don't stack up and look brighter where they meet.
+    private var wordOpacity: Double {
+        !wordTextColorRaw.isEmpty && timer == nil ? 0.5 : 1
     }
 }
