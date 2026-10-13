@@ -142,6 +142,10 @@ struct ContentView: View {
     /// finger translation while dragging, then the fly-out while a swipe commits.
     @State private var dragOffset: CGSize = .zero
     @State private var isDraggingWord = false
+    /// Whether SwiftUI still counts the swipe gesture as in progress. Unlike
+    /// `isDraggingWord` this also falls back when the gesture is cancelled
+    /// rather than ended, which never reaches `onEnded`.
+    @GestureState private var isSwipeGestureActive = false
     /// The direction the current drag would trigger if the finger lifted now.
     @State private var armedSwipeDirection: WordSwipeDirection?
     /// True from the moment a swipe is committed until the word has flown off
@@ -209,6 +213,7 @@ struct ContentView: View {
     /// the four actions or let the word spring back.
     private var swipeGesture: some Gesture {
         DragGesture(minimumDistance: 10, coordinateSpace: .named(Self.wordScreenSpace))
+            .updating($isSwipeGestureActive) { _, isActive, _ in isActive = true }
             .onChanged { value in
                 guard !isCommittingSwipe, !isSystemGestureTouch(value) else { return }
 
@@ -250,9 +255,10 @@ struct ContentView: View {
         return value.startLocation.y >= wordScreenSize.height - Self.systemGestureInset
     }
 
-    /// Put the word back where it belongs when the app stops being the active
-    /// one, in case a touch was still in flight — a system gesture that steals
-    /// one leaves the drag hanging, with no end to restore anything from.
+    /// Put the word back where it belongs when a drag stops without ending:
+    /// the app stops being the active one while a touch is in flight, or
+    /// SwiftUI cancels the gesture. Either way the drag is left hanging, with
+    /// no end to restore anything from.
     private func cancelActiveDrag() {
         guard isDraggingWord || wasTimerRunningBeforeTouch != nil else { return }
 
@@ -492,6 +498,13 @@ struct ContentView: View {
                         cancelActiveDrag()
                     }
                 }
+                .onChange(of: isSwipeGestureActive) { _, isActive in
+                    // A drag that ends normally has already tidied up in
+                    // `onEnded`, so this only does anything for a cancelled one.
+                    if !isActive {
+                        cancelActiveDrag()
+                    }
+                }
         }
         .preferredColorScheme(colorScheme)
     }
@@ -616,8 +629,22 @@ struct ContentView: View {
             guard hasAvailableWords else { return }
             selectRandomWords(recordHistory: true)
         }
+        .overlay { dragTouchBlocker }
         .coordinateSpace(.named(Self.wordScreenSpace))
         .onGeometryChange(for: CGSize.self) { $0.size } action: { wordScreenSize = $0 }
+    }
+
+    /// While the word is being dragged, any other finger is ignored. Left to
+    /// itself, SwiftUI hands a second touch on the word to the word's own
+    /// gestures, which cancels the drag half-way and fires a tap. This layer
+    /// sits outside the swipe gesture's reach and takes every touch that starts
+    /// during a drag; the dragging finger was claimed when it touched down, so
+    /// it carries on underneath.
+    private var dragTouchBlocker: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .ignoresSafeArea()
+            .allowsHitTesting(isDraggingWord)
     }
 
     /// While the word is held, the four swipe actions are spelled out in the
