@@ -28,6 +28,46 @@ nonisolated enum DefinitionSource: Sendable {
     case bundled
 }
 
+/// The online dictionaries definitions can come from, in the order they're
+/// tried. The first two are both derived from Wiktionary but served by
+/// unrelated hosts, so one going down doesn't take the other with it;
+/// `dictionaryAPIDev` is the original source and stays as a last resort.
+///
+/// The raw values are written to the downloaded definitions file, so they
+/// must not change.
+nonisolated enum DefinitionProvider: String, CaseIterable, Sendable {
+    case freeDictionary
+    case wiktionary
+    case dictionaryAPIDev
+
+    /// Only one provider serves pronunciation recordings, so the others
+    /// must not be allowed to cache "this word has no audio".
+    var servesPronunciationAudio: Bool { self == .dictionaryAPIDev }
+
+    /// The name shown on a definition downloaded from this provider.
+    /// freedictionaryapi.com and dictionaryapi.dev both call themselves
+    /// "Free Dictionary API", so each gets the half of it that matches its
+    /// own domain to keep them apart.
+    var displayName: String {
+        switch self {
+        case .freeDictionary: return "Free Dictionary"
+        case .wiktionary: return "Wiktionary"
+        case .dictionaryAPIDev: return "Dictionary API"
+        }
+    }
+
+    func endpoint(for encodedWord: String) -> URL? {
+        switch self {
+        case .freeDictionary:
+            return URL(string: "https://freedictionaryapi.com/api/v1/entries/en/\(encodedWord)")
+        case .wiktionary:
+            return URL(string: "https://en.wiktionary.org/api/rest_v1/page/definition/\(encodedWord)")
+        case .dictionaryAPIDev:
+            return URL(string: "https://api.dictionaryapi.dev/api/v2/entries/en/\(encodedWord)")
+        }
+    }
+}
+
 nonisolated struct DictionaryEntry: Identifiable, Sendable {
     let id = UUID()
     let wordType: String
@@ -35,13 +75,17 @@ nonisolated struct DictionaryEntry: Identifiable, Sendable {
     let example: String?
     let phonetic: String?
     let source: DefinitionSource
+    /// Where a downloaded definition came from. `nil` for user and bundled
+    /// definitions, and for downloads saved before the provider was recorded.
+    let provider: DefinitionProvider?
 
-    init(wordType: String, definition: String, example: String? = nil, phonetic: String? = nil, source: DefinitionSource) {
+    init(wordType: String, definition: String, example: String? = nil, phonetic: String? = nil, source: DefinitionSource, provider: DefinitionProvider? = nil) {
         self.wordType = wordType
         self.definition = definition
         self.example = example
         self.phonetic = phonetic
         self.source = source
+        self.provider = provider
     }
 
     var isDeletable: Bool {
@@ -162,35 +206,10 @@ actor EnglishDictionaryStore {
         }) else { return }
 
         persisted.remove(at: index)
-        saveDefinitionsFile(persisted, at: downloadedDefinitionsURL, includeExampleAndPhonetic: true)
+        saveDefinitionsFile(persisted, at: downloadedDefinitionsURL, includeExampleAndPhonetic: true, includeProvider: true)
     }
 
     // MARK: - Downloading definitions
-
-    /// The online dictionaries definitions can come from, in the order they're
-    /// tried. The first two are both derived from Wiktionary but served by
-    /// unrelated hosts, so one going down doesn't take the other with it;
-    /// `dictionaryAPIDev` is the original source and stays as a last resort.
-    private enum DefinitionProvider: CaseIterable {
-        case freeDictionary
-        case wiktionary
-        case dictionaryAPIDev
-
-        /// Only one provider serves pronunciation recordings, so the others
-        /// must not be allowed to cache "this word has no audio".
-        var servesPronunciationAudio: Bool { self == .dictionaryAPIDev }
-
-        func endpoint(for encodedWord: String) -> URL? {
-            switch self {
-            case .freeDictionary:
-                return URL(string: "https://freedictionaryapi.com/api/v1/entries/en/\(encodedWord)")
-            case .wiktionary:
-                return URL(string: "https://en.wiktionary.org/api/rest_v1/page/definition/\(encodedWord)")
-            case .dictionaryAPIDev:
-                return URL(string: "https://api.dictionaryapi.dev/api/v2/entries/en/\(encodedWord)")
-            }
-        }
-    }
 
     /// A definition normalised out of whichever provider answered, ready to be
     /// turned into a `DictionaryEntry`.
@@ -539,7 +558,8 @@ actor EnglishDictionaryStore {
                 definition: definition.definition,
                 example: definition.example,
                 phonetic: definition.phonetic,
-                source: .downloaded
+                source: .downloaded,
+                provider: provider
             ))
         }
 
@@ -552,7 +572,7 @@ actor EnglishDictionaryStore {
         // are kept in memory only.
         let saveLocally = (UserDefaults.standard.object(forKey: "saveDownloadedDefinitionsLocally") as? Bool) ?? true
         if saveLocally {
-            Self.saveDefinitionsFile(downloaded, at: Self.downloadedDefinitionsURL, includeExampleAndPhonetic: true)
+            Self.saveDefinitionsFile(downloaded, at: Self.downloadedDefinitionsURL, includeExampleAndPhonetic: true, includeProvider: true)
         }
 
         return definitions(for: word)
@@ -643,11 +663,13 @@ actor EnglishDictionaryStore {
             let definition: String
             var example: String?
             var phonetic: String?
+            var provider: DefinitionProvider?
 
             if source != .bundled {
                 // Downloaded and user files are only ever written by the app
                 // with properly quoted fields, so extra columns are trustworthy.
-                // Rows from before examples/phonetics existed have 3 fields.
+                // Rows from before examples/phonetics existed have 3 fields,
+                // and downloads from before the provider was recorded have 5.
                 definition = fields[2].trimmingCharacters(in: .whitespacesAndNewlines)
                 if fields.count > 3 {
                     let value = fields[3].trimmingCharacters(in: .whitespacesAndNewlines)
@@ -656,6 +678,9 @@ actor EnglishDictionaryStore {
                 if fields.count > 4 {
                     let value = fields[4].trimmingCharacters(in: .whitespacesAndNewlines)
                     phonetic = value.isEmpty ? nil : value
+                }
+                if source == .downloaded, fields.count > 5 {
+                    provider = DefinitionProvider(rawValue: fields[5].trimmingCharacters(in: .whitespacesAndNewlines))
                 }
             } else {
                 // Bundled files may contain unquoted commas in the
@@ -671,7 +696,8 @@ actor EnglishDictionaryStore {
                 definition: definition,
                 example: example,
                 phonetic: phonetic,
-                source: source
+                source: source,
+                provider: provider
             )
             definitions.append((word, entry))
         }
@@ -679,8 +705,14 @@ actor EnglishDictionaryStore {
         return definitions
     }
 
-    private nonisolated static func saveDefinitionsFile(_ definitions: [(word: String, entry: DictionaryEntry)], at url: URL, includeExampleAndPhonetic: Bool = false) {
-        var lines = [includeExampleAndPhonetic ? "word,pos,definition,example,phonetic" : "word,pos,definition"]
+    /// `includeProvider` adds a column after the phonetic, so it only takes
+    /// effect together with `includeExampleAndPhonetic`.
+    private nonisolated static func saveDefinitionsFile(_ definitions: [(word: String, entry: DictionaryEntry)], at url: URL, includeExampleAndPhonetic: Bool = false, includeProvider: Bool = false) {
+        var header = includeExampleAndPhonetic ? "word,pos,definition,example,phonetic" : "word,pos,definition"
+        if includeExampleAndPhonetic && includeProvider {
+            header += ",provider"
+        }
+        var lines = [header]
         for (word, entry) in definitions {
             var fields = [
                 csvField(word),
@@ -690,6 +722,9 @@ actor EnglishDictionaryStore {
             if includeExampleAndPhonetic {
                 fields.append(csvField(entry.example ?? ""))
                 fields.append(csvField(entry.phonetic ?? ""))
+                if includeProvider {
+                    fields.append(csvField(entry.provider?.rawValue ?? ""))
+                }
             }
             lines.append(fields.joined(separator: ","))
         }
@@ -1057,7 +1092,9 @@ struct WordDefinitionView: View {
     private func sourceBadge(for entry: DictionaryEntry) -> String? {
         switch entry.source {
         case .user: return "Your definition"
-        case .downloaded: return "Downloaded"
+        case .downloaded:
+            guard let provider = entry.provider else { return "Downloaded" }
+            return "Downloaded from \(provider.displayName)"
         case .bundled: return nil
         }
     }
