@@ -45,8 +45,9 @@ struct SelectableDefinitionText: UIViewRepresentable {
     let selection: DefinitionTextSelection
     /// Called with the selected text when "Definition" is chosen.
     let onDefine: (String) -> Void
-    /// Called with the selected text when "Favourite" is chosen.
-    let onFavourite: (String) -> Void
+    /// Called with the selected text when "Favourite" is chosen. Without
+    /// it the menu has no "Favourite".
+    let onFavourite: ((String) -> Void)?
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -121,8 +122,9 @@ struct SelectableWordTitle: View {
     let selection: DefinitionTextSelection
     /// Called with the selected text when "Definition" is chosen.
     let onDefine: (String) -> Void
-    /// Called with the selected text when "Favourite" is chosen.
-    let onFavourite: (String) -> Void
+    /// Called with the selected text when "Favourite" is chosen. Without
+    /// it the menu has no "Favourite".
+    let onFavourite: ((String) -> Void)?
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -152,7 +154,7 @@ private struct WordTitleTextView: UIViewRepresentable {
     let font: UIFont
     let selection: DefinitionTextSelection
     let onDefine: (String) -> Void
-    let onFavourite: (String) -> Void
+    let onFavourite: ((String) -> Void)?
 
     struct Content: Hashable {
         let word: String
@@ -201,7 +203,7 @@ private struct WordTitleTextView: UIViewRepresentable {
 final class SelectableTextCoordinator: NSObject, UITextViewDelegate {
     private var selection: DefinitionTextSelection?
     private var onDefine: (String) -> Void = { _ in }
-    private var onFavourite: (String) -> Void = { _ in }
+    private var onFavourite: ((String) -> Void)?
     private var content: AnyHashable?
 
     func update(
@@ -209,7 +211,7 @@ final class SelectableTextCoordinator: NSObject, UITextViewDelegate {
         content: AnyHashable,
         selection: DefinitionTextSelection,
         onDefine: @escaping (String) -> Void,
-        onFavourite: @escaping (String) -> Void,
+        onFavourite: ((String) -> Void)?,
         makeText: () -> NSAttributedString
     ) {
         self.onDefine = onDefine
@@ -239,29 +241,32 @@ final class SelectableTextCoordinator: NSObject, UITextViewDelegate {
             textView?.selectedRange = NSRange(location: 0, length: 0)
             self?.onDefine(selectedText)
         }
-        let favourite = UIAction(title: "Favourite", image: UIImage(systemName: "star")) { [weak self, weak textView] _ in
-            textView?.selectedRange = NSRange(location: 0, length: 0)
-            self?.onFavourite(selectedText)
-        }
+        let favourite: [UIMenuElement] = onFavourite == nil ? [] : [
+            UIAction(title: "Favourite", image: UIImage(systemName: "star")) { [weak self, weak textView] _ in
+                textView?.selectedRange = NSRange(location: 0, length: 0)
+                self?.onFavourite?(selectedText)
+            }
+        ]
         // "Favourite" takes the place of the system's "Look Up", which only
-        // repeats what "Definition" already does.
+        // repeats what "Definition" already does, so without "Favourite" it
+        // just goes.
         let actions = Self.replacingLookUp(in: suggestedActions, with: favourite)
-            ?? [favourite] + suggestedActions
+            ?? favourite + suggestedActions
         return UIMenu(children: [define] + actions)
     }
 
     /// The private action behind the system's "Look Up" command.
     private static let lookUpAction = Selector(("_define:"))
 
-    /// `elements` with the system's "Look Up" swapped for `replacement`, or nil
-    /// when the menu doesn't offer it. The edit menu leaves out actions put
-    /// inside its own submenus, so `replacement` goes just before the submenu
-    /// "Look Up" was in, which shows it in the same spot.
-    private static func replacingLookUp(in elements: [UIMenuElement], with replacement: UIMenuElement) -> [UIMenuElement]? {
+    /// `elements` with the system's "Look Up" swapped for `replacements`, or
+    /// nil when the menu doesn't offer it. The edit menu leaves out actions put
+    /// inside its own submenus, so `replacements` go just before the submenu
+    /// "Look Up" was in, which shows them in the same spot.
+    private static func replacingLookUp(in elements: [UIMenuElement], with replacements: [UIMenuElement]) -> [UIMenuElement]? {
         for (index, element) in elements.enumerated() {
             guard let withoutLookUp = removingLookUp(from: element) else { continue }
             var result = elements
-            result.replaceSubrange(index...index, with: [replacement] + withoutLookUp)
+            result.replaceSubrange(index...index, with: replacements + withoutLookUp)
             return result
         }
         return nil

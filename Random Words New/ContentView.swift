@@ -119,6 +119,8 @@ struct ContentView: View {
     @AppStorage("savedHistoryIndex") private var savedHistoryIndex: Int = -1
     @AppStorage("savedWordSourceCSVsData") private var savedWordSourceCSVsData: Data = Data()
     @AppStorage(FavouriteWordlists.storageKey) private var favouriteCSVsData: Data = Data()
+    @AppStorage(SimpleMode.storageKey) private var isSimpleMode: Bool = false
+    @AppStorage(SimpleMode.levelStorageKey) private var simpleModeLevel: Int = SimpleMode.defaultLevel
 
     @State private var selectedCSVs: Set<String> = []
     @State private var csvRanges: [String: RangePair] = [:]
@@ -321,7 +323,7 @@ struct ContentView: View {
     /// dim them.
     private var unavailableSwipeDirections: Set<WordSwipeDirection> {
         var unavailable: Set<WordSwipeDirection> = []
-        if selectedWords.isEmpty || FavouriteWordlists.decode(favouriteCSVsData).isEmpty {
+        if selectedWords.isEmpty || isSimpleMode || FavouriteWordlists.decode(favouriteCSVsData).isEmpty {
             unavailable.insert(.left)
         }
         if selectedWords.isEmpty {
@@ -469,6 +471,16 @@ struct ContentView: View {
                     saveRanges()
                     // A new range only applies from the next word on: the word
                     // on screen and the history stay as they are.
+                    rebuildWordPools()
+                }
+                .onChange(of: isSimpleMode) {
+                    guard !isRestoringState else { return }
+                    // A different set of lists, just like selecting others.
+                    loadCSVs()
+                }
+                .onChange(of: simpleModeLevel) {
+                    guard !isRestoringState else { return }
+                    // Like a new range: only applies from the next word on.
                     rebuildWordPools()
                 }
                 .onChange(of: minLengthExcludedCSVs) { _ in
@@ -820,7 +832,7 @@ struct ContentView: View {
     }
 
     private func handleLeftSwipe() {
-        guard !selectedWords.isEmpty else { return releaseWord() }
+        guard !selectedWords.isEmpty, !isSimpleMode else { return releaseWord() }
 
         let favourites = favouriteCSVs
         guard let onlyFavourite = favourites.first else {
@@ -1085,6 +1097,18 @@ struct ContentView: View {
         return nil
     }
     
+    /// The lists the words come from: the ones selected, or in simple mode
+    /// only the 333k list. The selection is kept for when simple mode ends.
+    private var activeCSVs: Set<String> {
+        isSimpleMode ? [SimpleMode.wordlist] : selectedCSVs
+    }
+
+    private func activeRange(for csv: String) -> RangePair? {
+        guard isSimpleMode else { return csvRanges[csv] }
+        let range = SimpleMode.range(forLevel: simpleModeLevel)
+        return RangePair(lower: range.lower, upper: range.upper)
+    }
+
     private func loadCSVs() {
         reloadCSVContents()
 
@@ -1098,8 +1122,8 @@ struct ContentView: View {
     private func reloadCSVContents() {
         allWordsPerCSV.removeAll()
         wordLengthsPerCSV.removeAll()
-        
-        for csv in selectedCSVs {
+
+        for csv in activeCSVs {
             let words = WordlistFile.words(named: csv)
             if !words.isEmpty {
                 allWordsPerCSV[csv] = words
@@ -1114,9 +1138,9 @@ struct ContentView: View {
         var newOrderedActiveCSVs: [String] = []
         var newTotalEligibleWordCount = 0
         var newWordLengths = wordLengthsPerCSV
-        
-        for csv in selectedCSVs {
-            guard let range = csvRanges[csv],
+
+        for csv in activeCSVs {
+            guard let range = activeRange(for: csv),
                   let words = allWordsPerCSV[csv] else {
                 continue
             }

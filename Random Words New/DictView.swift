@@ -29,6 +29,9 @@ struct DictView: View {
 
     @AppStorage(FavouriteWordlists.storageKey) private var favouriteCSVsData: Data = Data()
 
+    @AppStorage(SimpleMode.storageKey) private var isSimpleMode = false
+    @AppStorage(SimpleMode.levelStorageKey) private var complexityLevel = SimpleMode.defaultLevel
+
     private var favouriteCSVs: Set<String> {
         FavouriteWordlists.decode(favouriteCSVsData)
     }
@@ -58,88 +61,92 @@ struct DictView: View {
     
     var body: some View {
         List {
-            ForEach(orderedCSVFiles, id: \.self) { file in
-                VStack(alignment: .leading, spacing: 8) {
-
-                    // The boundary words can run to several lines (long
-                    // phrases), so they toggle the list just like its name.
+            if isSimpleMode {
+                complexitySlider
+            } else {
+                ForEach(orderedCSVFiles, id: \.self) { file in
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(file)
 
-                            if favouriteCSVs.contains(file) {
-                                Image(systemName: "star.fill")
-                                    .imageScale(.small)
-                                    .foregroundColor(.yellow)
+                        // The boundary words can run to several lines (long
+                        // phrases), so they toggle the list just like its name.
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text(file)
+
+                                if favouriteCSVs.contains(file) {
+                                    Image(systemName: "star.fill")
+                                        .imageScale(.small)
+                                        .foregroundColor(.yellow)
+                                }
+
+                                Spacer()
+
+                                if selectedCSVs.contains(file) {
+                                    Image(systemName: "checkmark")
+                                        .foregroundColor(.green)
+                                }
                             }
-
-                            Spacer()
 
                             if selectedCSVs.contains(file) {
-                                Image(systemName: "checkmark")
-                                    .foregroundColor(.green)
+                                let range = csvRanges[file] ?? (0.0, 1.0)
+                                let preview = csvPreviewInfo[file]
+                                let lowerWord = preview?.lowerWord ?? "-"
+                                let upperWord = preview?.upperWord ?? "-"
+
+                                Text("\(Int(range.0 * 100))% (\(lowerWord))  -  \(Int(range.1 * 100))% (\(upperWord))")
+                                    .font(.subheadline)
+                                    .foregroundColor(.gray)
                             }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            toggleSelection(file)
+                        }
+                        // Not on the whole row: holding a slider thumb still
+                        // before dragging it would count as a long press too.
+                        .onLongPressGesture {
+                            csvToEdit = file
                         }
 
                         if selectedCSVs.contains(file) {
-                            let range = csvRanges[file] ?? (0.0, 1.0)
-                            let preview = csvPreviewInfo[file]
-                            let lowerWord = preview?.lowerWord ?? "-"
-                            let upperWord = preview?.upperWord ?? "-"
-
-                            Text("\(Int(range.0 * 100))% (\(lowerWord))  -  \(Int(range.1 * 100))% (\(upperWord))")
-                                .font(.subheadline)
-                                .foregroundColor(.gray)
+                            RangeSlider(
+                                lowerValue: Binding(
+                                    get: { csvRanges[file]?.0 ?? 0.0 },
+                                    set: { newValue in
+                                        let upper = csvRanges[file]?.1 ?? 1.0
+                                        csvRanges[file] = (min(newValue, upper), upper)
+                                        refreshPreviewInfo(for: file, reusingLines: true)
+                                    }
+                                ),
+                                upperValue: Binding(
+                                    get: { csvRanges[file]?.1 ?? 1.0 },
+                                    set: { newValue in
+                                        let lower = csvRanges[file]?.0 ?? 0.0
+                                        csvRanges[file] = (lower, max(newValue, lower))
+                                        refreshPreviewInfo(for: file, reusingLines: true)
+                                    }
+                                )
+                            )
                         }
                     }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        toggleSelection(file)
+                    .swipeActions(edge: .trailing) {
+                        Button {
+                            toggleFavourite(file)
+                        } label: {
+                            if favouriteCSVs.contains(file) {
+                                Label("Unfavourite", systemImage: "star.fill")
+                            } else {
+                                Label("Favourite", systemImage: "star")
+                                    // Swipe actions fill their symbols by default,
+                                    // which would make this look favourited already.
+                                    .environment(\.symbolVariants, .none)
+                            }
+                        }
+                        .tint(.yellow)
                     }
-                    // Not on the whole row: holding a slider thumb still
-                    // before dragging it would count as a long press too.
-                    .onLongPressGesture {
+                    .accessibilityAction(named: "Edit") {
                         csvToEdit = file
                     }
-
-                    if selectedCSVs.contains(file) {
-                        RangeSlider(
-                            lowerValue: Binding(
-                                get: { csvRanges[file]?.0 ?? 0.0 },
-                                set: { newValue in
-                                    let upper = csvRanges[file]?.1 ?? 1.0
-                                    csvRanges[file] = (min(newValue, upper), upper)
-                                    refreshPreviewInfo(for: file, reusingLines: true)
-                                }
-                            ),
-                            upperValue: Binding(
-                                get: { csvRanges[file]?.1 ?? 1.0 },
-                                set: { newValue in
-                                    let lower = csvRanges[file]?.0 ?? 0.0
-                                    csvRanges[file] = (lower, max(newValue, lower))
-                                    refreshPreviewInfo(for: file, reusingLines: true)
-                                }
-                            )
-                        )
-                    }
-                }
-                .swipeActions(edge: .trailing) {
-                    Button {
-                        toggleFavourite(file)
-                    } label: {
-                        if favouriteCSVs.contains(file) {
-                            Label("Unfavourite", systemImage: "star.fill")
-                        } else {
-                            Label("Favourite", systemImage: "star")
-                                // Swipe actions fill their symbols by default,
-                                // which would make this look favourited already.
-                                .environment(\.symbolVariants, .none)
-                        }
-                    }
-                    .tint(.yellow)
-                }
-                .accessibilityAction(named: "Edit") {
-                    csvToEdit = file
                 }
             }
         }
@@ -155,20 +162,31 @@ struct DictView: View {
                 CenteredNavigationTitle(title: "Select Word Lists", centerX: listMidX)
             }
 
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    shareSelectedCSVs = Set(orderedCSVFiles)
-                    exportRanges = true
-                    showingShareOptions = true
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
+            ToolbarItem(placement: .topBarLeading) {
+                Toggle(isOn: $isSimpleMode) {
+                    Label("Simple Mode", systemImage: isSimpleMode ? "dial.low.fill" : "dial.low")
                 }
-                .disabled(orderedCSVFiles.isEmpty)
-                
-                Button {
-                    showingAddOptions = true
-                } label: {
-                    Image(systemName: "plus")
+                .toggleStyle(.button)
+            }
+
+            // Simple mode only has the one list, so there's nothing to share
+            // or add.
+            if !isSimpleMode {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        shareSelectedCSVs = Set(orderedCSVFiles)
+                        exportRanges = true
+                        showingShareOptions = true
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .disabled(orderedCSVFiles.isEmpty)
+
+                    Button {
+                        showingAddOptions = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
                 }
             }
         }
@@ -289,6 +307,40 @@ struct DictView: View {
                     favouriteCSVsData = FavouriteWordlists.encode(favourites)
                 }
             }
+        }
+    }
+
+    /// Takes the place of the word lists in simple mode: picks how far into
+    /// the 333k list, from its most common words to its rarest, they reach.
+    private var complexitySlider: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Word complexity")
+
+                Spacer()
+
+                Text("\(complexityLevel)")
+                    .monospacedDigit()
+                    .foregroundColor(.gray)
+            }
+
+            HStack {
+                Text("Simple")
+                Spacer()
+                Text("Complex")
+            }
+            .font(.subheadline)
+            .foregroundColor(.gray)
+
+            Slider(
+                value: Binding(
+                    get: { Double(complexityLevel) },
+                    set: { complexityLevel = Int($0.rounded()) }
+                ),
+                in: Double(SimpleMode.levels.lowerBound)...Double(SimpleMode.levels.upperBound),
+                step: 1
+            )
+            .accessibilityLabel("Word complexity")
         }
     }
 

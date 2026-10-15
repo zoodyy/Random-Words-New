@@ -909,6 +909,7 @@ struct DefinitionSheet: View {
     @State private var path: [DefinitionPage] = []
 
     @AppStorage(FavouriteWordlists.storageKey) private var favouriteCSVsData: Data = Data()
+    @AppStorage(SimpleMode.storageKey) private var isSimpleMode = false
     /// Set while the user picks which of several favourite lists the selected
     /// text goes in.
     @State private var favouritePickerTarget: FavouritePickerTarget?
@@ -939,11 +940,16 @@ struct DefinitionSheet: View {
     }
 
     private func definitionScreen(for words: [String]) -> some View {
-        WordDefinitionView(words: words) { lookedUpWords in
-            path.append(DefinitionPage(words: lookedUpWords))
-        } onFavourite: { word in
-            favourite(word)
-        }
+        WordDefinitionView(
+            words: words,
+            onLookUp: { lookedUpWords in
+                path.append(DefinitionPage(words: lookedUpWords))
+            },
+            // Simple mode has no favouriting.
+            onFavourite: isSimpleMode ? nil : { word in
+                favourite(word)
+            }
+        )
         .toolbar {
             // The sheet has no title, so its toasts show where one would be.
             ToolbarItem(placement: .principal) {
@@ -1030,10 +1036,11 @@ struct WordDefinitionView: View {
     @State private var selectedWord: String
     /// Opens another definition screen for the given words.
     let onLookUp: ([String]) -> Void
-    /// Saves the given text to the favourite lists.
-    let onFavourite: (String) -> Void
+    /// Saves the given text to the favourite lists. Without it nothing can be
+    /// favourited.
+    let onFavourite: ((String) -> Void)?
 
-    init(words: [String], onLookUp: @escaping ([String]) -> Void, onFavourite: @escaping (String) -> Void) {
+    init(words: [String], onLookUp: @escaping ([String]) -> Void, onFavourite: ((String) -> Void)?) {
         let cleaned = words.isEmpty ? [""] : words
         self.words = cleaned
         _selectedWord = State(initialValue: cleaned[0])
@@ -1145,7 +1152,7 @@ struct WordDefinitionView: View {
                         word: selectedWord,
                         selection: textSelection,
                         onDefine: lookUpSelection,
-                        onFavourite: favouriteSelection
+                        onFavourite: favouriteSelectionIfEnabled
                     )
 
                     if hasPronunciationAudio {
@@ -1192,7 +1199,7 @@ struct WordDefinitionView: View {
                             example: entry.example,
                             selection: textSelection,
                             onDefine: lookUpSelection,
-                            onFavourite: favouriteSelection
+                            onFavourite: favouriteSelectionIfEnabled
                         )
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 24)
@@ -1456,7 +1463,13 @@ struct WordDefinitionView: View {
     private func favouriteSelection(_ selection: String) {
         let phrase = Self.phrase(from: selection)
         guard !phrase.isEmpty else { return }
-        onFavourite(phrase)
+        onFavourite?(phrase)
+    }
+
+    /// `favouriteSelection`, unless nothing can be favourited.
+    private var favouriteSelectionIfEnabled: ((String) -> Void)? {
+        guard onFavourite != nil else { return nil }
+        return favouriteSelection
     }
 
     /// What a selection can pick up around the text itself, like the quotes
