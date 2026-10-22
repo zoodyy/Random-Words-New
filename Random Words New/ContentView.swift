@@ -180,8 +180,8 @@ struct ContentView: View {
     /// Set while the user picks which of several favourite lists the words
     /// go in.
     @State private var favouritePickerTarget: FavouritePickerTarget?
-    /// The lists the open picker has put the words in, so closing it can
-    /// move on to the next word just like a left swipe with one favourite.
+    /// The lists the open picker has put the words in, so closing it can say
+    /// so just like a left swipe with one favourite does.
     @State private var favouriteListsAddedTo: Set<String> = []
     @State private var wasTimerRunningBeforeFavouritePicker = false
     @State private var definitionTarget: DefinitionTarget?
@@ -841,10 +841,11 @@ struct ContentView: View {
         }
 
         guard favourites.count > 1 else {
+            // The words fly off into the list and come straight back: saving
+            // them is no reason to move on to others, or to touch playback.
             commitSwipe(to: CGSize(width: -horizontalFlyOut, height: dragOffset.height)) {
                 WordlistFile.add(selectedWords, toListNamed: onlyFavourite)
                 showToast(addedToFavouritesMessage(lists: [onlyFavourite]))
-                selectRandomWords(recordHistory: true)
             }
             return
         }
@@ -859,9 +860,9 @@ struct ContentView: View {
         favouritePickerTarget = FavouritePickerTarget(words: selectedWords, lists: favourites)
     }
 
-    /// Once the picker closes, words that went into a list leave the screen
-    /// like they do with a single favourite. Taking them out of lists, or
-    /// changing nothing, leaves them where they are.
+    /// Once the picker closes, the words stay on screen and playback goes back
+    /// to how it was, whatever the user changed in it. Words that went into a
+    /// list only get a toast, like they do with a single favourite.
     private func finishFavouritePicking() {
         let addedTo = favouriteListsAddedTo.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         favouriteListsAddedTo = []
@@ -872,11 +873,7 @@ struct ContentView: View {
         }
 
         guard !addedTo.isEmpty else { return }
-
-        commitSwipe(to: CGSize(width: -horizontalFlyOut, height: 0)) {
-            showToast(addedToFavouritesMessage(lists: addedTo))
-            selectRandomWords(recordHistory: true)
-        }
+        showToast(addedToFavouritesMessage(lists: addedTo))
     }
 
     private func addedToFavouritesMessage(lists: [String]) -> String {
